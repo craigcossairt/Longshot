@@ -13,4 +13,6 @@ const LONGSHOT_DEFAULTS = {
   maxHeight: 32768,
   scalePercent: 100,
   maxFileMB: 0,
+  oneClickCapture: false,
+  oneClickMode: "full",
 };

@@ -26,36 +26,67 @@ const DEFAULTS = {
   maxHeight: 32768,
   scalePercent: 100,
   maxFileMB: 0,
+  oneClickCapture: false,
+  oneClickMode: "full",
 };
 
 let captureInFlight = false;
 let lastCaptureAt = 0;
 
+async function applyActionPopup() {
+  const settings = await getSettings();
+  await chrome.action.setPopup({ popup: settings.oneClickCapture ? "" : "popup.html" });
+}
+
+function startCapture(mode, sendResponse) {
+  if (captureInFlight) {
+    sendResponse?.({ ok: false, error: "Capture already in progress" });
+    return Promise.resolve();
+  }
+  captureInFlight = true;
+  return captureActive(mode || "full")
+    .then(() => {
+      try {
+        sendResponse?.({ ok: true });
+      } catch {
+        /* popup closed */
+      }
+    })
+    .catch((error) => {
+      const message = friendlyError(error);
+      try {
+        sendResponse?.({ ok: false, error: message });
+      } catch {
+        /* popup closed */
+      }
+      void chrome.action.setBadgeText({ text: "!" });
+      void chrome.action.setTitle({ title: message });
+    })
+    .finally(() => {
+      captureInFlight = false;
+    });
+}
+
+void applyActionPopup();
+chrome.runtime.onInstalled.addListener(() => void applyActionPopup());
+chrome.runtime.onStartup.addListener(() => void applyActionPopup());
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && (changes.oneClickCapture || changes.oneClickMode)) {
+    void applyActionPopup();
+  }
+});
+chrome.action.onClicked.addListener(async () => {
+  const settings = await getSettings();
+  if (!settings.oneClickCapture) return;
+  void chrome.action.setBadgeText({ text: "" });
+  void chrome.action.setTitle({ title: "Capture this page" });
+  await startCapture(settings.oneClickMode || "full");
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "LONGSHOT_CAPTURE") {
-    if (captureInFlight) {
-      sendResponse({ ok: false, error: "Capture already in progress" });
-      return;
-    }
-    captureInFlight = true;
-    captureActive(msg.mode || "full")
-      .then(() => {
-        try {
-          sendResponse({ ok: true });
-        } catch {
-          /* popup closed */
-        }
-      })
-      .catch((error) => {
-        try {
-          sendResponse({ ok: false, error: friendlyError(error) });
-        } catch {
-          /* popup closed */
-        }
-      })
-      .finally(() => {
-        captureInFlight = false;
-      });
+    void chrome.action.setBadgeText({ text: "" });
+    startCapture(msg.mode || "full", sendResponse);
     return true;
   }
   if (msg.type === "LONGSHOT_EXPORT") {
@@ -136,6 +167,63 @@ function positions(full, view) {
   return list;
 }
 
+async function cropVisible(dataUrl, rect, dpr) {
+  const blob = await (await fetch(dataUrl)).blob();
+  const bmp = await createImageBitmap(blob);
+  const x = Math.max(0, Math.min(bmp.width - 1, Math.round(rect.x * dpr)));
+  const y = Math.max(0, Math.min(bmp.height - 1, Math.round(rect.y * dpr)));
+  const w = Math.max(1, Math.min(bmp.width - x, Math.round(rect.w * dpr)));
+  const h = Math.max(1, Math.min(bmp.height - y, Math.round(rect.h * dpr)));
+  const canvas = new OffscreenCanvas(w, h);
+  canvas.getContext("2d").drawImage(bmp, x, y, w, h, 0, 0, w, h);
+  return canvas;
+}
+
+async function finishCapture(canvas, dim, settings) {
+  canvas = fitLimits(canvas, settings);
+  canvas = await fitFileSize(canvas, settings);
+  const mime = mimeFor(settings.format);
+  let blob;
+  try {
+    blob = await canvas.convertToBlob({
+      type: mime,
+      quality: usesQuality(settings.format) ? settings.quality : 1,
+    });
+  } catch {
+    throw new Error(`This browser cannot encode ${String(settings.format).toUpperCase()}`);
+  }
+  const dataUrl = await blobToDataUrl(blob);
+  const record = {
+    id: crypto.randomUUID(),
+    title: dim.title,
+    url: dim.url,
+    dataUrl,
+    width: canvas.width,
+    height: canvas.height,
+    format: settings.format,
+    createdAt: Date.now(),
+    byteSize: blob.size,
+  };
+  await longshotPushHistory(record);
+  await chrome.storage.local.set({ longshotCurrent: record });
+  if (settings.autoDownload) {
+    await saveExport(blob, filename(record, settings), settings);
+  }
+  await chrome.tabs.create({ url: chrome.runtime.getURL("editor.html") });
+}
+
+async function captureRegion(tab, settings) {
+  await ensureContent(tab.id);
+  report("Select an area", { index: 0, total: 1, phase: "select" });
+  const rect = await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SELECT_REGION" });
+  if (!rect?.w || !rect?.h) throw new Error("Selection cancelled");
+  report("Capturing", { index: 1, total: 1, phase: "capture" });
+  await delay(60);
+  const dataUrl = await captureVisibleTabPaced(tab.windowId);
+  const canvas = await cropVisible(dataUrl, rect, rect.devicePixelRatio || 1);
+  await finishCapture(canvas, rect, settings);
+}
+
 async function captureActive(mode) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("No active tab");
@@ -143,6 +231,10 @@ async function captureActive(mode) {
     throw new Error("This page cannot be captured");
   }
   const settings = await getSettings();
+  if (mode === "region") {
+    await captureRegion(tab, settings);
+    return;
+  }
   await ensureContent(tab.id);
   const dim = await chrome.tabs.sendMessage(tab.id, {
     type: "LONGSHOT_MEASURE",
@@ -199,37 +291,7 @@ async function captureActive(mode) {
   const dpr = dim.devicePixelRatio || 1;
   let canvas = await stitch(shots, fullW, fullH, dim.viewportWidth, dim.viewportHeight, dpr);
   canvas = compositeChrome(canvas, dim, settings);
-  canvas = fitLimits(canvas, settings);
-  canvas = await fitFileSize(canvas, settings);
-
-  const mime = mimeFor(settings.format);
-  let blob;
-  try {
-    blob = await canvas.convertToBlob({
-      type: mime,
-      quality: usesQuality(settings.format) ? settings.quality : 1,
-    });
-  } catch {
-    throw new Error(`This browser cannot encode ${String(settings.format).toUpperCase()}`);
-  }
-  const dataUrl = await blobToDataUrl(blob);
-  const record = {
-    id: crypto.randomUUID(),
-    title: dim.title,
-    url: dim.url,
-    dataUrl,
-    width: canvas.width,
-    height: canvas.height,
-    format: settings.format,
-    createdAt: Date.now(),
-    byteSize: blob.size,
-  };
-  await longshotPushHistory(record);
-  await chrome.storage.local.set({ longshotCurrent: record });
-  if (settings.autoDownload) {
-    await saveExport(blob, filename(record, settings), settings);
-  }
-  await chrome.tabs.create({ url: chrome.runtime.getURL("editor.html") });
+  await finishCapture(canvas, dim, settings);
 }
 
 async function stitch(shots, fullW, fullH, vw, vh, dpr) {

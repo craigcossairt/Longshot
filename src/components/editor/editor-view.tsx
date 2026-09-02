@@ -12,7 +12,7 @@ import {
   FileText,
   Highlighter,
   ImagePlus,
-  List,
+  History,
   Minus,
   MousePointer2,
   Pencil,
@@ -49,6 +49,7 @@ import {
 import { uid } from "@/lib/utils";
 import { HiddenFileInput } from "@/components/hidden-file-input";
 import { FeedbackForm } from "@/components/feedback-form";
+import { GithubStarButton } from "@/components/github-star-button";
 import type { Annotation, CropRect, Point, ShapeAnn, StrokeAnn, Tool } from "@/lib/types";
 
 const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2 }[] = [
@@ -479,6 +480,11 @@ export function EditorView() {
         <Button size="sm" onClick={() => void exportNow("pdf")} disabled={busy}>
           <FileText /> PDF
         </Button>
+        <Button variant="ghost" size="icon-sm" asChild aria-label="Files" title="Files">
+          <Link to="/files">
+            <History />
+          </Link>
+        </Button>
         <Button variant="ghost" size="icon-sm" asChild aria-label="Settings">
           <Link to="/settings">
             <Settings />
@@ -584,12 +590,8 @@ export function EditorView() {
               <Trash2 /> Delete
             </Button>
           )}
-          <Button variant="ghost" size="icon-sm" asChild aria-label="Files" title="Files">
-            <Link to="/files">
-              <List />
-            </Link>
-          </Button>
           <FeedbackForm />
+          <GithubStarButton />
         </div>
       </div>
 

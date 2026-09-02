@@ -23,9 +23,27 @@
         font: 14px/1.4 Outfit, system-ui, sans-serif;
       }
       h1 { font-family: Georgia, serif; font-size: 22px; font-weight: 500; margin: 0; }
-      header { padding: 16px 16px 8px; }
-      p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 14px 12px 6px 16px;
+      }
       .stack { display: grid; gap: 8px; padding: 8px 16px 16px; }
+      #options {
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 0;
+        color: var(--muted);
+      }
+      #options svg { width: 18px; height: 18px; display: block; }
+      #options:hover { color: var(--fg); }
       button {
         height: 40px;
         border: 1px solid var(--border);
@@ -81,12 +99,17 @@
   <body>
     <header>
       <h1>Longshot</h1>
-      <p>Capture the tab, then edit in a new window.</p>
+      <button id="options" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      </button>
     </header>
     <div class="stack">
       <button class="primary" id="full">Capture full page</button>
       <button id="visible">Visible viewport</button>
-      <button class="link" id="options">Settings</button>
+      <button id="region">Select an area</button>
     </div>
     <div id="progressWrap" hidden>
       <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressBar">

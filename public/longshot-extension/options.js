@@ -12,6 +12,8 @@ const keys = [
   "maxHeight",
   "scalePercent",
   "maxFileMB",
+  "oneClickCapture",
+  "oneClickMode",
 ];
 
 const statusEl = document.getElementById("status");
@@ -98,6 +100,11 @@ function syncScale() {
   setHint("maxFileHint", maxFileHint(Number(document.getElementById("maxFileMB").value)));
 }
 
+function syncOneClick() {
+  const row = document.getElementById("oneClickModeRow");
+  if (row) row.hidden = !document.getElementById("oneClickCapture").checked;
+}
+
 function syncFolderHint() {
   if (folderLabel) {
     folderHint.textContent = `Saving to “${folderLabel}” on this PC. Edit the name to use a Downloads folder instead, or reset.`;
@@ -142,6 +149,7 @@ function applyData(data) {
   syncQuality();
   syncScale();
   syncFolderHint();
+  syncOneClick();
 }
 
 async function persist() {
@@ -154,6 +162,7 @@ function queueSave() {
   syncQuality();
   syncScale();
   syncFolderHint();
+  syncOneClick();
   setStatus("Saving…");
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {

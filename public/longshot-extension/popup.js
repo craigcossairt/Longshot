@@ -1,13 +1,16 @@
 const status = document.getElementById("status");
 const fullBtn = document.getElementById("full");
 const visibleBtn = document.getElementById("visible");
+const regionBtn = document.getElementById("region");
 const progressWrap = document.getElementById("progressWrap");
 const progressFill = document.getElementById("progressFill");
 const progressBar = document.getElementById("progressBar");
+const captureButtons = [fullBtn, visibleBtn, regionBtn];
 
 function setBusy(busy) {
-  fullBtn.disabled = busy;
-  visibleBtn.disabled = busy;
+  captureButtons.forEach((btn) => {
+    btn.disabled = busy;
+  });
 }
 
 function friendlyStatus(message) {
@@ -39,7 +42,8 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 function run(mode) {
-  setProgress(0, 1, "Capturing");
+  const selecting = mode === "region";
+  setProgress(0, 1, selecting ? "Select an area on the page" : "Capturing");
   setBusy(true);
   chrome.runtime.sendMessage({ type: "LONGSHOT_CAPTURE", mode }, (res) => {
     setBusy(false);
@@ -56,8 +60,10 @@ function run(mode) {
     setProgress(1, 1, "Opening editor");
     window.close();
   });
+  if (selecting) window.close();
 }
 
 fullBtn.addEventListener("click", () => run("full"));
 visibleBtn.addEventListener("click", () => run("visible"));
+regionBtn.addEventListener("click", () => run("region"));
 document.getElementById("options").addEventListener("click", () => chrome.runtime.openOptionsPage());

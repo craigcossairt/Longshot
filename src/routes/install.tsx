@@ -53,9 +53,10 @@ function InstallPage() {
 
         <div className="mt-6 space-y-4 text-sm leading-7 text-muted">
           <p>
-            Click the Longshot icon on any page. The stitch opens in a new tab with copy, download,
-            PDF, crop, and annotation. Options live under the extension details, and match the
-            settings in this studio.
+            Click the Longshot icon on any page for full page, visible viewport, or a dragged
+            area. The stitch opens in a new tab with copy, download, PDF, crop, and annotation.
+            Settings is the gear on the popup, or right-click the icon. One-click capture is off
+            until you turn it on there.
           </p>
           <p>
             This preview cannot inject into other websites. That is what the extension is for. Use

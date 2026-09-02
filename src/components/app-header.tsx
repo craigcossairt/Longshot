@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { List, Settings } from "lucide-react";
+import { History, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AppHeader({ className }: { className?: string }) {
@@ -32,7 +32,7 @@ export function AppHeader({ className }: { className?: string }) {
           className="inline-flex size-11 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
           aria-label="Files"
         >
-          <List className="size-4" />
+          <History className="size-4" />
         </Link>
         <Link
           to="/settings"
