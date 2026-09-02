@@ -1,6 +1,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "vite";
+import { stampTslib } from "./nitro.config";
 import { defineConfig } from "vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
@@ -234,5 +235,12 @@ export default defineConfig(({ command, isPreview }) => ({
         ]
       : []),
     viteReact(),
+    {
+      name: "copy-tslib-vercel",
+      apply: "build",
+      closeBundle() {
+        stampTslib();
+      },
+    },
   ],
 }));
