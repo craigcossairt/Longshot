@@ -1,3 +1,4 @@
+# Published product is extension/ only.
 node_modules/
 .project_id
 .github_repo
@@ -15,5 +16,19 @@ attachments/
 AGENTS.md
 AGENTS.project.md
 startup.sh
-public/__grok/
-.env*
+
+# Local App Builder / studio leftover. Not part of the public extension repo.
+src/
+server/
+api/
+scripts/
+public/
+migrations/
+package.json
+package-lock.json
+vite.config.ts
+tsconfig.json
+nitro.config.ts
+eslint.config.mjs
+.prettierrc
+.node_modules.lock
