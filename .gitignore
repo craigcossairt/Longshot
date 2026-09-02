@@ -4,6 +4,7 @@ node_modules/
 .env
 .env.*
 .vercel
+.vercel/output
 .output
 dist
 data/
