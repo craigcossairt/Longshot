@@ -2,7 +2,7 @@ blank_issues_enabled: true
 contact_links:
   - name: Private security report
     url: https://github.com/craigcossairt/Longshot/security/advisories/new
-    about: Do not file public issues for vulnerabilities.
-  - name: Send product feedback
-    url: https://longshot-seven.vercel.app
-    about: Use Feedback in the editor if you already have Longshot installed.
+    about: Use GitHub’s private advisory form. Do not file public issues for vulnerabilities.
+  - name: Product feedback
+    url: https://github.com/craigcossairt/Longshot/issues/new
+    about: Open an issue, or use Feedback in the extension editor.

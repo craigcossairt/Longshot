@@ -14,6 +14,8 @@ const keys = [
   "maxFileMB",
   "oneClickCapture",
   "oneClickMode",
+  "skipEditor",
+  "skipEditorAction",
 ];
 
 const statusEl = document.getElementById("status");
@@ -100,9 +102,20 @@ function syncScale() {
   setHint("maxFileHint", maxFileHint(Number(document.getElementById("maxFileMB").value)));
 }
 
+function syncLinkedSelect(toggleId, selectId, rowId) {
+  const on = document.getElementById(toggleId).checked;
+  const select = document.getElementById(selectId);
+  const row = document.getElementById(rowId);
+  if (select) select.disabled = !on;
+  if (row) row.classList.toggle("is-disabled", !on);
+}
+
 function syncOneClick() {
-  const row = document.getElementById("oneClickModeRow");
-  if (row) row.hidden = !document.getElementById("oneClickCapture").checked;
+  syncLinkedSelect("oneClickCapture", "oneClickMode", "oneClickModeRow");
+}
+
+function syncSkipEditor() {
+  syncLinkedSelect("skipEditor", "skipEditorAction", "skipEditorActionRow");
 }
 
 function syncFolderHint() {
@@ -150,6 +163,7 @@ function applyData(data) {
   syncScale();
   syncFolderHint();
   syncOneClick();
+  syncSkipEditor();
 }
 
 async function persist() {
@@ -163,6 +177,7 @@ function queueSave() {
   syncScale();
   syncFolderHint();
   syncOneClick();
+  syncSkipEditor();
   setStatus("Saving…");
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {

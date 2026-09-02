@@ -15,4 +15,6 @@ const LONGSHOT_DEFAULTS = {
   maxFileMB: 0,
   oneClickCapture: false,
   oneClickMode: "full",
+  skipEditor: false,
+  skipEditorAction: "copy",
 };

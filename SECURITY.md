@@ -1,20 +1,17 @@
 # Security
 
-Captures stay on the device. The extension does not upload screenshots. Feedback
-you send from the editor is emailed privately to the maintainer and is not shown
-in Settings.
+Captures stay on the device. The extension does not upload screenshots.
 
 ## Reporting a vulnerability
 
-Please do **not** open a public issue for security problems.
+Do not open a public issue for security problems.
 
-Email **craigcossairt@gmail.com** with:
+Use [GitHub private vulnerability reporting](https://github.com/craigcossairt/Longshot/security/advisories/new):
 
-- A description of the issue
-- Steps to reproduce
-- Affected version (extension `manifest.json` or git commit)
+1. Open a draft advisory
+2. Describe the issue and how to reproduce it
+3. Include the extension version (`manifest.json`) or git commit
 
-You will get a reply when it has been triaged. Please give a reasonable window
-before any public disclosure.
+That report is visible only to maintainers until it is published.
 
-You can also use GitHub’s private vulnerability reporting on this repository.
+For bugs that are not security issues, use [GitHub Issues](https://github.com/craigcossairt/Longshot/issues).

@@ -121,9 +121,9 @@
                 <span></span>
               </label>
             </div>
-            <label class="field" id="oneClickModeRow" hidden>
+            <label class="field" id="oneClickModeRow">
               <span class="field-label">Toolbar click captures</span>
-              <select id="oneClickMode">
+              <select id="oneClickMode" disabled>
                 <option value="full">Full page</option>
                 <option value="visible">Visible viewport</option>
                 <option value="region">Selected area</option>
@@ -136,6 +136,23 @@
           <h2>Saving</h2>
           <p class="note">What happens after a capture.</p>
           <div class="fields">
+            <div class="toggle">
+              <div>
+                <strong>Skip the editor</strong>
+                <p class="hint">After capture, do not open the editor. Files still keeps a copy.</p>
+              </div>
+              <label class="switch">
+                <input id="skipEditor" type="checkbox" />
+                <span></span>
+              </label>
+            </div>
+            <label class="field" id="skipEditorActionRow">
+              <span class="field-label">Instead</span>
+              <select id="skipEditorAction" disabled>
+                <option value="copy">Copy to clipboard</option>
+                <option value="download">Download</option>
+              </select>
+            </label>
             <div class="toggle">
               <div>
                 <strong>Auto-download</strong>

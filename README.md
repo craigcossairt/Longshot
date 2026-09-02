@@ -1,47 +1,34 @@
 # Longshot
 
-Full-page screenshots in the browser, then crop, annotate, copy, download, or
-save as PDF. Captures stay on your machine.
+A Chrome and Brave extension for full-page screenshots. Capture, crop,
+annotate, copy, download, or save as PDF. Everything stays on your machine.
 
 <p>
-  <img src="public/longshot-icon.png" alt="Longshot icon" width="96" height="96" />
+  <img src="extension/icons/icon128.png" alt="Longshot icon" width="96" height="96" />
 </p>
-
-**Studio:** [longshot-seven.vercel.app](https://longshot-seven.vercel.app)
 
 ## What it does
 
-- Full page, visible viewport, or drag-to-select an area
+- Full page, visible viewport, or drag to select an area
 - Sticky headers hidden after the first tile so they are not repeated
 - Editor: crop, pen, shapes, text, stamps, undo/redo
 - Export PNG, JPEG, WebP, AVIF, or PDF
 - Files page for recent captures
-- Optional one-click toolbar capture (off by default)
+- Optional one-click toolbar capture
+- Optional skip-the-editor path that copies to the clipboard (or downloads)
 
-## Install the extension (unpacked)
+## Install (unpacked)
 
-Chrome Web Store listing is not published yet. Sideload it:
+Chrome Web Store listing is not published yet.
 
-1. Clone this repo, or download `public/longshot-extension.zip` from the
-   [studio install page](https://longshot-seven.vercel.app/install) and unzip it.
+1. Clone this repo.
 2. Open `chrome://extensions` or `brave://extensions`.
 3. Turn on Developer mode.
-4. Load unpacked and choose the `extension/` folder (or the unzipped
-   `longshot-extension` folder).
+4. Load unpacked and choose the `extension/` folder.
 
-Right-click the toolbar icon → **Options** for format, folder, and one-click
-capture. If one-click is on, the icon starts a capture instead of opening the
-menu.
-
-## Studio
-
-```
-npm install
-npm run dev
-```
-
-The studio is for editing and trying sample pages. Capturing a live website
-needs the extension.
+Right-click the toolbar icon → **Options** for format, folder, one-click
+capture, and skip-the-editor. If one-click is on, the icon starts a capture
+instead of opening the menu.
 
 ## Privacy
 

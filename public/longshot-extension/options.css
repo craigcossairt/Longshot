@@ -127,6 +127,15 @@ select:focus {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
 }
 
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.field.is-disabled .field-label {
+  color: var(--muted);
+}
+
 input[type="range"] {
   width: 100%;
   accent-color: var(--primary);

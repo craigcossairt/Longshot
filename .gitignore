@@ -10,4 +10,10 @@ dist
 data/
 screenshots/
 artifacts/
+attachments/
+.grok/
+AGENTS.md
+AGENTS.project.md
+startup.sh
+public/__grok/
 .env*

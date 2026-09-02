@@ -28,6 +28,8 @@ const DEFAULTS = {
   maxFileMB: 0,
   oneClickCapture: false,
   oneClickMode: "full",
+  skipEditor: false,
+  skipEditorAction: "copy",
 };
 
 let captureInFlight = false;
@@ -83,7 +85,33 @@ chrome.action.onClicked.addListener(async () => {
   await startCapture(settings.oneClickMode || "full");
 });
 
+async function copyPngToClipboard(dataUrl) {
+  if (await chrome.offscreen.hasDocument()) {
+    await chrome.offscreen.closeDocument();
+  }
+  await chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["CLIPBOARD"],
+    justification: "Copy the capture to the clipboard",
+  });
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "LONGSHOT_OFFSCREEN_COPY", dataUrl });
+    if (!result?.ok) throw new Error(result?.error || "Copy failed");
+  } finally {
+    if (await chrome.offscreen.hasDocument()) {
+      await chrome.offscreen.closeDocument();
+    }
+  }
+}
+
+function flashBadge(text) {
+  void chrome.action.setBadgeBackgroundColor({ color: "#d2d6d0" });
+  void chrome.action.setBadgeText({ text });
+  setTimeout(() => chrome.action.setBadgeText({ text: "" }), 1800);
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "LONGSHOT_OFFSCREEN_COPY") return;
   if (msg.type === "LONGSHOT_CAPTURE") {
     void chrome.action.setBadgeText({ text: "" });
     startCapture(msg.mode || "full", sendResponse);
@@ -206,8 +234,18 @@ async function finishCapture(canvas, dim, settings) {
   };
   await longshotPushHistory(record);
   await chrome.storage.local.set({ longshotCurrent: record });
-  if (settings.autoDownload) {
+  if (settings.autoDownload || (settings.skipEditor && settings.skipEditorAction === "download")) {
     await saveExport(blob, filename(record, settings), settings);
+  }
+  if (settings.skipEditor) {
+    if (settings.skipEditorAction !== "download") {
+      const png = mime === "image/png" ? blob : await canvas.convertToBlob({ type: "image/png" });
+      await copyPngToClipboard(await blobToDataUrl(png));
+      flashBadge("ok");
+    } else {
+      flashBadge("ok");
+    }
+    return;
   }
   await chrome.tabs.create({ url: chrome.runtime.getURL("editor.html") });
 }
