@@ -203,6 +203,9 @@ export default defineConfig(({ command, isPreview }) => ({
     port: 8081,
     strictPort: true,
   },
+  ssr: {
+    noExternal: ["tslib"],
+  },
   resolve: { tsconfigPaths: true },
   plugins: [
     pgliteBootstrapPlugin(),
@@ -225,7 +228,7 @@ export default defineConfig(({ command, isPreview }) => ({
             serverDir: "./server",
             // Radix server chunks import tslib as a package; without a trace
             // the Vercel function 500s before /api/feedback can call Resend.
-            traceDeps: ["tslib"],
+            traceDeps: ["tslib*"],
           }),
         ]
       : []),
