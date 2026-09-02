@@ -1,10 +1,26 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const funcDir = join(root, ".vercel", "output", "functions", "api", "feedback.func");
-const configPath = join(root, ".vercel", "output", "config.json");
+const output = join(root, ".vercel", "output");
+const serverFunc = join(output, "functions", "__server.func");
+const funcDir = join(output, "functions", "api", "feedback.func");
+const configPath = join(output, "config.json");
+const tslibSrc = join(root, "node_modules", "tslib");
+
+if (!existsSync(output)) {
+  console.log("stamp-feedback-fn: no .vercel/output, skip");
+  process.exit(0);
+}
+
+if (existsSync(tslibSrc) && existsSync(serverFunc)) {
+  for (const destRoot of [serverFunc, join(serverFunc, "_libs")]) {
+    mkdirSync(join(destRoot, "node_modules"), { recursive: true });
+    cpSync(tslibSrc, join(destRoot, "node_modules", "tslib"), { recursive: true });
+  }
+  console.log("stamp-feedback-fn: copied tslib into __server.func");
+}
 
 const handler = `module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -61,11 +77,6 @@ const handler = `module.exports = async (req, res) => {
 };
 `;
 
-if (!existsSync(join(root, ".vercel", "output"))) {
-  console.log("stamp-feedback-fn: no .vercel/output, skip");
-  process.exit(0);
-}
-
 mkdirSync(funcDir, { recursive: true });
 writeFileSync(join(funcDir, "index.js"), handler);
 writeFileSync(
@@ -78,21 +89,14 @@ writeFileSync(
   }),
 );
 
-const dest = "/api/feedback";
-const route = { src: "^/api/feedback$", dest };
 if (existsSync(configPath)) {
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   const routes = Array.isArray(config.routes) ? config.routes : [];
+  const dest = "/api/feedback";
+  const route = { src: "^/api/feedback$", dest };
   config.routes = [route, ...routes.filter((item) => item.dest !== dest && item.src !== route.src)];
   writeFileSync(configPath, JSON.stringify(config));
   console.log("stamp-feedback-fn: patched config.json");
 } else {
-  writeFileSync(
-    configPath,
-    JSON.stringify({
-      version: 3,
-      routes: [route, { handle: "filesystem" }, { src: "/(.*)", dest: "/__server" }],
-    }),
-  );
-  console.log("stamp-feedback-fn: wrote config.json");
+  console.log("stamp-feedback-fn: wrote standalone function; left routing to Nitro");
 }
