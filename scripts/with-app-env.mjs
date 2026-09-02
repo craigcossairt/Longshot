@@ -20,9 +20,9 @@
  * `process.env`, which is why the merge has to happen before Vite starts.
  */
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const APP_ENV_REL_PATH = ".grok/app-env.json";
@@ -60,9 +60,93 @@ export function readAppEnv(root) {
   }
 }
 
+/**
+ * Optional local secrets (`.env.local`). Absent in the grok.com sandbox; used
+ * on a developer machine for `XAI_API_KEY` and similar. Never commit the file.
+ */
+export function readDotEnvLocal(root) {
+  try {
+    const text = readFileSync(join(root, ".env.local"), "utf8");
+    const env = {};
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1);
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      env[key] = value;
+    }
+    return env;
+  } catch {
+    return {};
+  }
+}
+
 /** File values under the process environment: an explicit override wins. */
 export function mergeAppEnv(appEnv, processEnv) {
   return { ...appEnv, ...processEnv };
+}
+
+/**
+ * Resolve a PATH command for `spawn()` on Windows.
+ *
+ * `npm run` puts `node_modules/.bin` on PATH, but `spawn("vite")` does not
+ * honor PATHEXT, so `vite.cmd` is invisible. Do not use `shell: true` — that
+ * splits `C:\Program Files\nodejs\node.exe` on spaces.
+ */
+export function resolveSpawnCommand(command, env = process.env) {
+  if (process.platform !== "win32") return command;
+  if (/[/\\:]/.test(command)) return command;
+  const pathEnv = env.PATH || env.Path || "";
+  const exts = (env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean);
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    // PATHEXT first: `node_modules/.bin/vite` is a Unix shim that exists() on
+    // Windows but is not spawnable. Prefer `vite.cmd`.
+    for (const ext of exts) {
+      const candidate = join(dir, command + ext);
+      if (existsSync(candidate)) return candidate;
+    }
+    const exact = join(dir, command);
+    if (existsSync(exact)) return exact;
+  }
+  return command;
+}
+
+function windowsQuote(value) {
+  const s = String(value);
+  if (!/[\s"&<>|^()]/.test(s)) return s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Node 20+ refuses to spawn `.cmd` / `.bat` without a shell (EINVAL /
+ * CVE-2024-27980). Route those through `cmd.exe` with verbatim arguments so
+ * paths like `C:\Users\Craig Cossairt\...` stay one token. Direct `.exe`
+ * (including `node.exe`) is still spawned as-is — `shell: true` would split
+ * `C:\Program Files\nodejs\node.exe`.
+ */
+export function spawnInvocation(command, args, env = process.env) {
+  const resolved = resolveSpawnCommand(command, env);
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved)) {
+    const comspec = env.ComSpec || env.COMSPEC || "cmd.exe";
+    const line = [resolved, ...args].map(windowsQuote).join(" ");
+    // `/s` strips the first and last quote, so wrap the whole line once more
+    // or a path like `C:\Users\Craig Cossairt\...` becomes `C:\Users\Craig`.
+    return {
+      command: comspec,
+      args: ["/d", "/s", "/c", `"${line}"`],
+      options: { windowsVerbatimArguments: true },
+    };
+  }
+  return { command: resolved, args, options: {} };
 }
 
 /**
@@ -110,8 +194,17 @@ function main(argv) {
     console.error("usage: node scripts/with-app-env.mjs <command> [args…]");
     process.exit(2);
   }
-  const env = mergeAppEnv(readAppEnv(projectRoot()), process.env);
-  const child = spawn(command, args, { stdio: "inherit", env });
+  const root = projectRoot();
+  const env = mergeAppEnv(
+    { ...readAppEnv(root), ...readDotEnvLocal(root) },
+    process.env,
+  );
+  const invocation = spawnInvocation(command, args, env);
+  const child = spawn(invocation.command, invocation.args, {
+    stdio: "inherit",
+    env,
+    ...invocation.options,
+  });
   // The dev server is long-running and is stopped by signalling this wrapper.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));

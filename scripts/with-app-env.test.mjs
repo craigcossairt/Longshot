@@ -11,6 +11,9 @@ import {
   parseAppEnv,
   projectRoot,
   readAppEnv,
+  readDotEnvLocal,
+  resolveSpawnCommand,
+  spawnInvocation,
 } from "./with-app-env.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -48,6 +51,63 @@ test("a missing app-env.json is a clean no-op", () => {
 test("reads the app env from a workspace", () => {
   const root = makeWorkspace('{"VITE_AUTH_ENABLED":"false"}');
   assert.deepEqual(readAppEnv(root), { VITE_AUTH_ENABLED: "false" });
+});
+
+test("reads .env.local secrets when present", () => {
+  const root = makeWorkspace();
+  writeFileSync(
+    join(root, ".env.local"),
+    "# comment\nXAI_API_KEY=test-key\nTMDB_API_KEY='quoted'\n",
+  );
+  assert.deepEqual(readDotEnvLocal(root), {
+    XAI_API_KEY: "test-key",
+    TMDB_API_KEY: "quoted",
+  });
+});
+
+test("a missing .env.local is a clean no-op", () => {
+  assert.deepEqual(readDotEnvLocal(makeWorkspace()), {});
+});
+
+test("resolveSpawnCommand leaves absolute paths alone", () => {
+  assert.equal(resolveSpawnCommand(process.execPath), process.execPath);
+});
+
+test("resolveSpawnCommand prefers PATHEXT over an extensionless shim", () => {
+  if (process.platform !== "win32") return;
+  const dir = mkdtempSync(join(tmpdir(), "bin-"));
+  writeFileSync(join(dir, "vite"), "unix shim");
+  writeFileSync(join(dir, "vite.cmd"), "@echo off");
+  const resolved = resolveSpawnCommand("vite", {
+    PATH: dir,
+    PATHEXT: ".EXE;.CMD;.BAT;.COM",
+  });
+  assert.equal(resolved.toLowerCase(), join(dir, "vite.cmd").toLowerCase());
+});
+
+test("spawnInvocation runs .cmd files through cmd.exe", () => {
+  if (process.platform !== "win32") return;
+  const dir = mkdtempSync(join(tmpdir(), "bin-"));
+  const cmdPath = join(dir, "vite.cmd");
+  writeFileSync(cmdPath, "@echo off");
+  const invocation = spawnInvocation("vite", ["dev", "--host", "0.0.0.0"], {
+    PATH: dir,
+    PATHEXT: ".EXE;.CMD;.BAT;.COM",
+    ComSpec: "C:\\Windows\\System32\\cmd.exe",
+  });
+  assert.match(invocation.command.toLowerCase(), /cmd\.exe$/);
+  assert.deepEqual(invocation.args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.equal(invocation.args[3].startsWith('"'), true);
+  assert.equal(invocation.args[3].endsWith('"'), true);
+  assert.match(invocation.args[3], /vite\.cmd/i);
+  assert.match(invocation.args[3], /dev/);
+  assert.equal(invocation.options.windowsVerbatimArguments, true);
+});
+
+test("spawnInvocation leaves node.exe as a direct spawn", () => {
+  const invocation = spawnInvocation(process.execPath, ["-e", "0"]);
+  assert.equal(invocation.command, process.execPath);
+  assert.deepEqual(invocation.args, ["-e", "0"]);
 });
 
 test("an explicit process-env override wins over the file", () => {
