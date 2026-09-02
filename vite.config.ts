@@ -228,6 +228,7 @@ export default defineConfig(({ command, isPreview }) => ({
             serverDir: "./server",
             // Radix server chunks import tslib as a package; without a trace
             // the Vercel function 500s before /api/feedback can call Resend.
+            noExternals: true,
             traceDeps: ["tslib*"],
           }),
         ]
