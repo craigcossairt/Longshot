@@ -78,15 +78,21 @@ writeFileSync(
   }),
 );
 
+const dest = "/api/feedback";
+const route = { src: "^/api/feedback$", dest };
 if (existsSync(configPath)) {
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   const routes = Array.isArray(config.routes) ? config.routes : [];
-  const dest = "/api/feedback";
-  const nextRoutes = routes.filter((route) => route.dest !== dest && route.src !== "^/api/feedback$");
-  nextRoutes.unshift({ src: "^/api/feedback$", dest });
-  config.routes = nextRoutes;
+  config.routes = [route, ...routes.filter((item) => item.dest !== dest && item.src !== route.src)];
   writeFileSync(configPath, JSON.stringify(config));
-  console.log("stamp-feedback-fn: routed /api/feedback to standalone function");
+  console.log("stamp-feedback-fn: patched config.json");
 } else {
-  console.log("stamp-feedback-fn: wrote function, no config.json to patch");
+  writeFileSync(
+    configPath,
+    JSON.stringify({
+      version: 3,
+      routes: [route, { handle: "filesystem" }, { src: "/(.*)", dest: "/__server" }],
+    }),
+  );
+  console.log("stamp-feedback-fn: wrote config.json");
 }
