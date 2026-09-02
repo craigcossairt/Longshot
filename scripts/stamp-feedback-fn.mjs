@@ -89,14 +89,47 @@ writeFileSync(
   }),
 );
 
-if (existsSync(configPath)) {
-  const config = JSON.parse(readFileSync(configPath, "utf8"));
-  const routes = Array.isArray(config.routes) ? config.routes : [];
-  const dest = "/api/feedback";
-  const route = { src: "^/api/feedback$", dest };
-  config.routes = [route, ...routes.filter((item) => item.dest !== dest && item.src !== route.src)];
-  writeFileSync(configPath, JSON.stringify(config));
-  console.log("stamp-feedback-fn: patched config.json");
-} else {
-  console.log("stamp-feedback-fn: wrote standalone function; left routing to Nitro");
+const serverVc = join(serverFunc, ".vc-config.json");
+if (existsSync(serverFunc) && !existsSync(serverVc)) {
+  writeFileSync(
+    serverVc,
+    JSON.stringify({
+      handler: "index.mjs",
+      launcherType: "Nodejs",
+      shouldAddHelpers: false,
+      supportsResponseStreaming: true,
+      runtime: "nodejs22.x",
+    }),
+  );
+  console.log("stamp-feedback-fn: wrote __server.func/.vc-config.json");
 }
+
+const feedbackRoute = { src: "^/api/feedback$", dest: "/api/feedback" };
+const defaultConfig = {
+  version: 3,
+  framework: { name: "nitro", version: "3.0.260610-beta" },
+  overrides: {},
+  routes: [
+    feedbackRoute,
+    {
+      headers: { "cache-control": "public, max-age=31536000, immutable" },
+      src: "/assets/(.*)",
+    },
+    { handle: "filesystem" },
+    { src: "/(.*)", dest: "/__server" },
+  ],
+};
+
+let config = defaultConfig;
+if (existsSync(configPath)) {
+  const existing = JSON.parse(readFileSync(configPath, "utf8"));
+  const routes = Array.isArray(existing.routes) ? existing.routes : [];
+  existing.version = existing.version || 3;
+  existing.routes = [
+    feedbackRoute,
+    ...routes.filter((item) => item.dest !== feedbackRoute.dest && item.src !== feedbackRoute.src),
+  ];
+  config = existing;
+}
+writeFileSync(configPath, JSON.stringify(config));
+console.log("stamp-feedback-fn: wrote config.json");
