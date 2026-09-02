@@ -16,7 +16,7 @@ function InstallPage() {
         <h1 className="font-display mt-3 text-4xl">Brave and Chrome extension</h1>
         <p className="mt-4 leading-7 text-muted">
           Stores flagged GoFullPage as policy-violating, so this build is meant to be loaded as an
-          unpacked extension. It captures the real tab — including long pages and inner frames —
+          unpacked extension. It captures the real tab, including long pages and inner frames,
           then opens the editor in a new tab.
         </p>
 
@@ -58,7 +58,7 @@ function InstallPage() {
             settings in this studio.
           </p>
           <p>
-            This preview cannot inject into other websites — that’s what the extension is for. Use
+            This preview cannot inject into other websites. That is what the extension is for. Use
             the sample pages here to try the editor immediately.
           </p>
         </div>

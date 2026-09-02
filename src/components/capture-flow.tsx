@@ -92,8 +92,9 @@ export function CaptureOverlay({ busy, status }: { busy: boolean; status: string
       <div className="w-full max-w-sm rounded-xl border border-border bg-surface p-6 shadow-soft">
         <p className="text-xs tracking-[0.18em] text-muted uppercase">Longshot</p>
         <p className="font-display mt-2 text-2xl">{status}</p>
-        <div className="relative mt-5 h-1.5 overflow-hidden rounded-full bg-surface-2">
-          <div className="absolute inset-y-0 w-1/3 rounded-full bg-primary" />
+        <div className="relative mt-5 h-2 overflow-hidden rounded-full border border-border bg-surface-2">
+          <div className="absolute inset-y-0 w-1/3 rounded-full bg-primary animate-indet" />
+          <div className="progress-sheen-layer" />
         </div>
         <p className="mt-3 text-sm text-muted">Scrolling inner frames, then stitching the page.</p>
       </div>

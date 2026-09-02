@@ -1,4 +1,4 @@
-export type ImageFormat = "png" | "jpeg" | "webp";
+export type ImageFormat = "png" | "jpeg" | "webp" | "avif";
 
 export type AppSettings = {
   format: ImageFormat;
@@ -25,6 +25,9 @@ export type CaptureRecord = {
   width: number;
   height: number;
   format: ImageFormat;
+  thumbUrl?: string;
+  byteSize?: number;
+  edited?: boolean;
 };
 
 export type Point = { x: number; y: number };

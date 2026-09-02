@@ -1,17 +1,63 @@
 const status = document.getElementById("status");
+const fullBtn = document.getElementById("full");
+const visibleBtn = document.getElementById("visible");
+const progressWrap = document.getElementById("progressWrap");
+const progressFill = document.getElementById("progressFill");
+const progressBar = document.getElementById("progressBar");
+
+function setBusy(busy) {
+  fullBtn.disabled = busy;
+  visibleBtn.disabled = busy;
+}
+
+function friendlyStatus(message) {
+  if (/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i.test(message || "")) {
+    return "Chrome limited screenshot speed. Wait a second and try again.";
+  }
+  return message;
+}
+
+function setProgress(index, total, text) {
+  progressWrap.hidden = false;
+  const pct = total > 0 ? Math.max(4, Math.round((index / total) * 100)) : 8;
+  const clamped = Math.min(100, pct);
+  progressFill.style.width = `${clamped}%`;
+  progressBar.setAttribute("aria-valuenow", String(clamped));
+  status.textContent = text || `${clamped}%`;
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type !== "LONGSHOT_STATUS") return;
+  if (typeof msg.index === "number" && typeof msg.total === "number") {
+    setProgress(msg.index, msg.total, msg.text || "");
+    return;
+  }
+  if (msg.text) {
+    progressWrap.hidden = false;
+    status.textContent = msg.text;
+  }
+});
 
 function run(mode) {
-  status.textContent = "Scrolling and stitching…";
+  setProgress(0, 1, "Capturing");
+  setBusy(true);
   chrome.runtime.sendMessage({ type: "LONGSHOT_CAPTURE", mode }, (res) => {
+    setBusy(false);
     if (chrome.runtime.lastError) {
-      status.textContent = chrome.runtime.lastError.message;
+      progressFill.style.width = "0%";
+      status.textContent = friendlyStatus(chrome.runtime.lastError.message);
       return;
     }
-    if (!res?.ok) status.textContent = res?.error || "Capture failed";
-    else window.close();
+    if (!res?.ok) {
+      progressFill.style.width = "0%";
+      status.textContent = friendlyStatus(res?.error || "Capture failed");
+      return;
+    }
+    setProgress(1, 1, "Opening editor");
+    window.close();
   });
 }
 
-document.getElementById("full").addEventListener("click", () => run("full"));
-document.getElementById("visible").addEventListener("click", () => run("visible"));
+fullBtn.addEventListener("click", () => run("full"));
+visibleBtn.addEventListener("click", () => run("visible"));
 document.getElementById("options").addEventListener("click", () => chrome.runtime.openOptionsPage());

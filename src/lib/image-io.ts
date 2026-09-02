@@ -1,6 +1,8 @@
 import { jsPDF } from "jspdf";
 import type { AppSettings, CaptureRecord, ImageFormat } from "@/lib/types";
 import { buildFilename, leafName } from "@/lib/filename";
+import { getDownloadDirHandle, writeToDownloadDir } from "@/lib/download-folder";
+import { mimeFor, usesQuality } from "@/lib/formats";
 
 export function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
@@ -15,7 +17,7 @@ export function canvasToBlob(canvas: HTMLCanvasElement, format: ImageFormat, qua
   if (canvas.width < 1 || canvas.height < 1) {
     return Promise.reject(new Error("Capture produced an empty image. Try again."));
   }
-  const mime = format === "jpeg" ? "image/jpeg" : format === "webp" ? "image/webp" : "image/png";
+  const mime = mimeFor(format);
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
@@ -91,7 +93,7 @@ export async function constrainCanvas(source: HTMLCanvasElement, settings: AppSe
   let blob = await canvasToBlob(canvas, settings.format, quality);
   if (!maxBytes || blob.size <= maxBytes) return { canvas, blob };
 
-  if (settings.format !== "png") {
+  if (usesQuality(settings.format)) {
     for (const q of [0.82, 0.7, 0.58, 0.45, 0.32]) {
       quality = Math.min(quality, q);
       blob = await canvasToBlob(canvas, settings.format, quality);
@@ -106,7 +108,7 @@ export async function constrainCanvas(source: HTMLCanvasElement, settings: AppSe
     const h = Math.max(256, Math.round(canvas.height * factor));
     if (w === canvas.width && h === canvas.height) break;
     canvas = scaleCanvas(canvas, w, h);
-    blob = await canvasToBlob(canvas, settings.format, settings.format === "png" ? 1 : quality);
+    blob = await canvasToBlob(canvas, settings.format, usesQuality(settings.format) ? quality : 1);
     if (blob.size <= maxBytes) return { canvas, blob };
     if (w <= 256 || h <= 256) break;
   }
@@ -121,6 +123,15 @@ type SavePickerWindow = Window & {
 };
 
 export async function saveBlob(blob: Blob, filename: string, saveAsDialog: boolean) {
+  try {
+    const handle = await getDownloadDirHandle();
+    if (handle) {
+      await writeToDownloadDir(handle, filename, blob);
+      return;
+    }
+  } catch {
+    /* fall back to the save picker or a download */
+  }
   const picker = (window as SavePickerWindow).showSaveFilePicker;
   if (saveAsDialog && picker) {
     try {

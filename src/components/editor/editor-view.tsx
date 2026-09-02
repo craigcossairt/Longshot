@@ -12,6 +12,7 @@ import {
   FileText,
   Highlighter,
   ImagePlus,
+  List,
   Minus,
   MousePointer2,
   Pencil,
@@ -19,6 +20,7 @@ import {
   Settings,
   Smile,
   Square,
+  SquareX,
   Trash2,
   Type,
   Undo2,
@@ -32,9 +34,21 @@ import { hydrateCaptureFromSession, useCapture } from "@/lib/capture-store";
 import { getSettings } from "@/lib/settings";
 import { rasterize } from "@/lib/rasterize";
 import { canvasToBlob, blobToDataUrl, copyPng, exportCaptureFile } from "@/lib/image-io";
-import { DRAW_COLORS, STAMP_EMOJI, arrowPointsAttr, hitTest, moveAnnotation, offsetAll } from "@/lib/annotate";
+import {
+  DRAW_COLORS,
+  STAMP_EMOJI,
+  annotationBounds,
+  arrowPointsAttr,
+  handlePoints,
+  hitTest,
+  moveAnnotation,
+  offsetAll,
+  resizeAnnotation,
+  resizeRect,
+} from "@/lib/annotate";
 import { uid } from "@/lib/utils";
 import { HiddenFileInput } from "@/components/hidden-file-input";
+import { FeedbackForm } from "@/components/feedback-form";
 import type { Annotation, CropRect, Point, ShapeAnn, StrokeAnn, Tool } from "@/lib/types";
 
 const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2 }[] = [
@@ -59,8 +73,10 @@ export function EditorView() {
   const commit = useCapture((s) => s.commit);
   const undo = useCapture((s) => s.undo);
   const redo = useCapture((s) => s.redo);
+  const canUndo = useCapture((s) => s.history.length > 0);
+  const canRedo = useCapture((s) => s.future.length > 0);
   const setCrop = useCapture((s) => s.setCrop);
-  const replaceImage = useCapture((s) => s.replaceImage);
+  const applyEdit = useCapture((s) => s.applyEdit);
   const setAnnotations = useCapture((s) => s.setAnnotations);
 
   const [tool, setTool] = useState<Tool>("select");
@@ -68,14 +84,20 @@ export function EditorView() {
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [zoom, setZoom] = useState(0.45);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [emoji, setEmoji] = useState("⭐");
+  const [stampOpen, setStampOpen] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const draftRef = useRef<Annotation | null>(null);
   const [, force] = useState(0);
   const dragRef = useRef<{ id: string; last: Point } | null>(null);
+  const resizeRef = useRef<{ id: string; handle: string; last: Point } | null>(null);
+  const cropDragRef = useRef<{ mode: "resize" | "move"; handle?: string; last: Point } | null>(null);
+  const textPlaceRef = useRef<Point | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
   const pendingImage = useRef<string | null>(null);
 
   useEffect(() => {
@@ -89,6 +111,10 @@ export function EditorView() {
   }, [current?.id, current?.width]);
 
   useEffect(() => {
+    if (editingId) textRef.current?.focus();
+  }, [editingId]);
+
+  useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const meta = e.metaKey || e.ctrlKey;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -96,21 +122,29 @@ export function EditorView() {
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
+      } else if (meta && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
       } else if (meta && e.key.toLowerCase() === "s") {
         e.preventDefault();
         void exportNow("image");
       } else if (meta && e.key.toLowerCase() === "c" && !window.getSelection()?.toString()) {
         e.preventDefault();
         void exportNow("copy");
+      } else if (e.key === "Enter" && crop) {
+        e.preventDefault();
+        void applyCrop();
       } else if (e.key === "Escape") {
         setTool("select");
         setSelectedId(null);
+        setEditingId(null);
         setMenu(null);
         setCrop(null);
       } else if ((e.key === "Backspace" || e.key === "Delete") && selectedId) {
         e.preventDefault();
         commit(annotations.filter((a) => a.id !== selectedId));
         setSelectedId(null);
+        setEditingId(null);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -141,12 +175,46 @@ export function EditorView() {
     }
     const p = pointFromEvent(e);
     if (tool === "select") {
+      const selected = annotations.find((a) => a.id === selectedId);
+      if (selected) {
+        const handles = handlePoints(annotationBounds(selected));
+        const hitHandle = (Object.keys(handles) as Array<keyof typeof handles>).find((key) => {
+          const pt = handles[key];
+          return Math.hypot(p.x - pt.x, p.y - pt.y) <= 12;
+        });
+        if (hitHandle) {
+          resizeRef.current = { id: selected.id, handle: hitHandle, last: p };
+          return;
+        }
+      }
       const hit = [...annotations].reverse().find((a) => hitTest(a, p));
       setSelectedId(hit?.id ?? null);
+      setEditingId(hit?.type === "text" ? hit.id : null);
       if (hit) dragRef.current = { id: hit.id, last: p };
       return;
     }
     if (tool === "crop") {
+      const currentCrop = crop ? normalizeCrop(crop, size.w, size.h) : null;
+      if (currentCrop && currentCrop.w >= 8 && currentCrop.h >= 8) {
+        const handles = handlePoints(currentCrop);
+        const hitHandle = (Object.keys(handles) as Array<keyof typeof handles>).find((key) => {
+          const pt = handles[key];
+          return Math.hypot(p.x - pt.x, p.y - pt.y) <= 14;
+        });
+        if (hitHandle) {
+          cropDragRef.current = { mode: "resize", handle: hitHandle, last: p };
+          return;
+        }
+        if (
+          p.x >= currentCrop.x &&
+          p.x <= currentCrop.x + currentCrop.w &&
+          p.y >= currentCrop.y &&
+          p.y <= currentCrop.y + currentCrop.h
+        ) {
+          cropDragRef.current = { mode: "move", last: p };
+          return;
+        }
+      }
       setCrop({ x: p.x, y: p.y, w: 0, h: 0 });
       return;
     }
@@ -185,20 +253,7 @@ export function EditorView() {
       return;
     }
     if (tool === "text") {
-      const text: Annotation = {
-        id: uid(),
-        type: "text",
-        x: p.x,
-        y: p.y,
-        w: 280,
-        fontSize: 28,
-        text: "Type here",
-        color,
-        strokeWidth,
-      };
-      commit([...annotations, text]);
-      setSelectedId(text.id);
-      setTool("select");
+      textPlaceRef.current = p;
       return;
     }
     if (tool === "pen" || tool === "highlight") {
@@ -230,8 +285,26 @@ export function EditorView() {
 
   function onPointerMove(e: React.PointerEvent) {
     const p = pointFromEvent(e);
-    if (tool === "crop" && e.buttons === 1 && crop) {
+    if (cropDragRef.current && e.buttons === 1 && crop) {
+      const { mode, handle, last } = cropDragRef.current;
+      const dx = p.x - last.x;
+      const dy = p.y - last.y;
+      const currentCrop = normalizeCrop(crop, size.w, size.h) ?? crop;
+      if (mode === "resize" && handle) setCrop(resizeRect(currentCrop, handle, dx, dy));
+      else setCrop({ ...currentCrop, x: currentCrop.x + dx, y: currentCrop.y + dy });
+      cropDragRef.current = { mode, handle, last: p };
+      return;
+    }
+    if (tool === "crop" && e.buttons === 1 && crop && !cropDragRef.current) {
       setCrop({ ...crop, w: p.x - crop.x, h: p.y - crop.y });
+      return;
+    }
+    if (resizeRef.current && e.buttons === 1) {
+      const { id, handle, last } = resizeRef.current;
+      const dx = p.x - last.x;
+      const dy = p.y - last.y;
+      setAnnotations((prev) => prev.map((a) => (a.id === id ? resizeAnnotation(a, handle, dx, dy) : a)));
+      resizeRef.current = { id, handle, last: p };
       return;
     }
     if (dragRef.current && e.buttons === 1) {
@@ -260,8 +333,36 @@ export function EditorView() {
   }
 
   function onPointerUp() {
-    if (dragRef.current) {
+    if (textPlaceRef.current) {
+      const p = textPlaceRef.current;
+      textPlaceRef.current = null;
+      const text: Annotation = {
+        id: uid(),
+        type: "text",
+        x: p.x,
+        y: p.y,
+        w: 280,
+        fontSize: 28,
+        text: "",
+        color,
+        strokeWidth,
+      };
+      commit([...annotations, text]);
+      setSelectedId(null);
+      setEditingId(text.id);
+      return;
+    }
+    if (cropDragRef.current) {
+      cropDragRef.current = null;
+      if (crop) setCrop(normalizeCrop(crop, size.w, size.h));
+      return;
+    }
+    if (tool === "crop" && crop) {
+      setCrop(normalizeCrop(crop, size.w, size.h));
+    }
+    if (dragRef.current || resizeRef.current) {
       dragRef.current = null;
+      resizeRef.current = null;
       commit(useCapture.getState().annotations);
       return;
     }
@@ -301,13 +402,16 @@ export function EditorView() {
       const canvas = await rasterize(current.dataUrl, [], n);
       const settings = getSettings();
       const blob = await canvasToBlob(canvas, current.format, settings.quality);
-      replaceImage({
-        ...current,
-        dataUrl: await blobToDataUrl(blob),
-        width: canvas.width,
-        height: canvas.height,
+      applyEdit({
+        capture: {
+          ...current,
+          dataUrl: await blobToDataUrl(blob),
+          width: canvas.width,
+          height: canvas.height,
+          edited: true,
+        },
+        annotations: offsetAll(annotations, -n.x, -n.y),
       });
-      commit(offsetAll(annotations, -n.x, -n.y));
       toast.success("Crop applied");
     } finally {
       setBusy(false);
@@ -337,7 +441,7 @@ export function EditorView() {
     <div className="flex min-h-dvh flex-col bg-canvas">
       <header className="flex flex-wrap items-center gap-2 border-b border-border bg-bg px-3 py-2">
         <Link to="/" className="mr-1 flex items-center gap-2 px-1 text-fg">
-          <Camera className="size-4" />
+          <img src="/favicon-48.png" alt="" width={16} height={16} className="size-4 rounded-sm" />
           <span className="font-display hidden text-lg sm:inline">Longshot</span>
         </Link>
         <div className="min-w-0 flex-1">
@@ -346,10 +450,24 @@ export function EditorView() {
             {current.width} × {current.height} · {current.format.toUpperCase()}
           </p>
         </div>
-        <Button variant="ghost" size="icon-sm" onClick={undo} aria-label="Undo">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => {
+            commit([]);
+            setSelectedId(null);
+            setEditingId(null);
+          }}
+          disabled={annotations.length === 0}
+          aria-label="Clear annotations"
+          title="Clear annotations"
+        >
+          <SquareX />
+        </Button>
+        <Button variant="ghost" size="icon-sm" onClick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)">
           <Undo2 />
         </Button>
-        <Button variant="ghost" size="icon-sm" onClick={redo} aria-label="Redo">
+        <Button variant="ghost" size="icon-sm" onClick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Y)">
           <Redo2 />
         </Button>
         <Button variant="secondary" size="sm" onClick={() => void exportNow("copy")} disabled={busy}>
@@ -378,10 +496,16 @@ export function EditorView() {
               title={t.label}
               onClick={() => {
                 setTool(t.id);
+                setStampOpen(t.id === "emoji");
+                if (t.id !== "crop") setCrop(null);
+                if (t.id === "crop") {
+                  setSelectedId(null);
+                  setEditingId(null);
+                }
                 if (t.id === "image") fileRef.current?.click();
               }}
-              className={`inline-flex size-11 items-center justify-center rounded-md transition-colors ${
-                tool === t.id ? "bg-primary text-primary-fg" : "text-muted hover:bg-surface-2 hover:text-fg"
+              className={`inline-flex size-11 items-center justify-center rounded-md transition-[transform,background-color,color] duration-150 ${
+                tool === t.id ? "bg-primary text-primary-fg" : "text-muted hover:bg-surface-2 hover:text-fg hover:-translate-y-px active:scale-95"
               }`}
             >
               <Icon className="size-4" />
@@ -396,8 +520,13 @@ export function EditorView() {
               key={c}
               type="button"
               aria-label={`Color ${c}`}
-              onClick={() => setColor(c)}
-              className="size-7 rounded-full border border-border"
+              onClick={() => {
+                setColor(c);
+                if (selectedId) {
+                  commit(annotations.map((a) => (a.id === selectedId ? { ...a, color: c } : a)));
+                }
+              }}
+              className="size-7 rounded-full border border-border transition-transform duration-150 hover:scale-110 active:scale-95"
               style={{
                 background: c,
                 outline: color === c ? "2px solid var(--color-primary)" : undefined,
@@ -412,19 +541,24 @@ export function EditorView() {
             <Slider min={1} max={16} step={1} value={[strokeWidth]} onValueChange={([v]) => setStrokeWidth(v)} />
           </div>
           {tool === "emoji" && (
-            <Popover>
+            <Popover open={stampOpen} onOpenChange={setStampOpen}>
               <PopoverTrigger asChild>
                 <Button variant="secondary" size="sm">
-                  {emoji} Stamp
+                  {emoji} Stamps
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="grid w-64 grid-cols-5 gap-1">
+              <PopoverContent className="grid w-80 grid-cols-8 gap-1">
                 {STAMP_EMOJI.map((item) => (
                   <button
                     key={item}
                     type="button"
-                    className="flex size-11 items-center justify-center rounded-md text-xl hover:bg-surface-2"
-                    onClick={() => setEmoji(item)}
+                    className={`flex size-10 items-center justify-center rounded-md text-xl transition-transform duration-150 hover:scale-110 hover:bg-surface-2 active:scale-95 ${
+                      emoji === item ? "bg-surface-2 ring-1 ring-primary" : ""
+                    }`}
+                    onClick={() => {
+                      setEmoji(item);
+                      setStampOpen(false);
+                    }}
                   >
                     {item}
                   </button>
@@ -444,11 +578,18 @@ export function EditorView() {
               onClick={() => {
                 commit(annotations.filter((a) => a.id !== selectedId));
                 setSelectedId(null);
+                setEditingId(null);
               }}
             >
               <Trash2 /> Delete
             </Button>
           )}
+          <Button variant="ghost" size="icon-sm" asChild aria-label="Files" title="Files">
+            <Link to="/files">
+              <List />
+            </Link>
+          </Button>
+          <FeedbackForm />
         </div>
       </div>
 
@@ -477,7 +618,10 @@ export function EditorView() {
               onPointerUp={onPointerUp}
             >
               {allAnns.map((ann) => (
-                <AnnotationNode key={ann.id} ann={ann} selected={ann.id === selectedId} />
+                <g key={ann.id}>
+                  <AnnotationNode ann={ann} selected={ann.id === selectedId} editing={ann.id === editingId} />
+                  {ann.id === selectedId ? <SelectionChrome ann={ann} /> : null}
+                </g>
               ))}
               {cropN && (
                 <g>
@@ -496,22 +640,52 @@ export function EditorView() {
                     strokeWidth="2"
                     strokeDasharray="6 4"
                   />
+                  {cropN.w >= 8 && cropN.h >= 8
+                    ? Object.entries(handlePoints(cropN)).map(([key, pt]) => (
+                        <rect
+                          key={key}
+                          x={pt.x - 6}
+                          y={pt.y - 6}
+                          width={12}
+                          height={12}
+                          fill="#f1f0ec"
+                          stroke="#0e0e10"
+                          strokeWidth="1"
+                          pointerEvents="none"
+                        />
+                      ))
+                    : null}
                 </g>
               )}
             </svg>
             {annotations
               .filter((a) => a.type === "text")
               .map((ann) =>
-                ann.type === "text" && selectedId === ann.id ? (
+                ann.type === "text" && editingId === ann.id ? (
                   <textarea
                     key={ann.id}
+                    ref={textRef}
                     value={ann.text}
+                    placeholder="Type here"
                     onChange={(e) =>
                       setAnnotations((prev) =>
                         prev.map((item) => (item.id === ann.id && item.type === "text" ? { ...item, text: e.target.value } : item)),
                       )
                     }
-                    className="absolute resize-none bg-transparent p-0 font-sans outline-none"
+                    onBlur={() => {
+                      window.setTimeout(() => {
+                        if (document.activeElement === textRef.current) return;
+                        const latest = useCapture.getState().annotations;
+                        const currentText = latest.find((item) => item.id === ann.id);
+                        if (currentText?.type === "text" && !currentText.text.trim()) {
+                          commit(latest.filter((item) => item.id !== ann.id));
+                        } else {
+                          commit(latest);
+                        }
+                        setEditingId((id) => (id === ann.id ? null : id));
+                      }, 0);
+                    }}
+                    className="absolute resize-none bg-transparent p-0 font-sans outline-none ring-1 ring-primary/70"
                     style={{
                       left: ann.x * zoom,
                       top: ann.y * zoom,
@@ -599,7 +773,40 @@ function normalizeCrop(crop: CropRect | null, maxW: number, maxH: number): CropR
   };
 }
 
-function AnnotationNode({ ann, selected }: { ann: Annotation; selected: boolean }) {
+function SelectionChrome({ ann }: { ann: Annotation }) {
+  const b = annotationBounds(ann);
+  const handles = handlePoints(b);
+  return (
+    <g>
+      <rect
+        x={b.x}
+        y={b.y}
+        width={Math.max(1, b.w)}
+        height={Math.max(1, b.h)}
+        fill="none"
+        stroke="#d2d6d0"
+        strokeWidth="1.5"
+        strokeDasharray="5 4"
+        pointerEvents="none"
+      />
+      {Object.entries(handles).map(([key, pt]) => (
+        <rect
+          key={key}
+          x={pt.x - 5}
+          y={pt.y - 5}
+          width={10}
+          height={10}
+          fill="#f1f0ec"
+          stroke="#0e0e10"
+          strokeWidth="1"
+          pointerEvents="none"
+        />
+      ))}
+    </g>
+  );
+}
+
+function AnnotationNode({ ann, selected, editing }: { ann: Annotation; selected: boolean; editing?: boolean }) {
   const stroke = selected ? "#d2d6d0" : ann.color;
   if (ann.type === "pen" || ann.type === "highlight") {
     const d = ann.points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x} ${p.y}`).join(" ");
@@ -688,7 +895,7 @@ function AnnotationNode({ ann, selected }: { ann: Annotation; selected: boolean 
     );
   }
   if (ann.type === "text") {
-    return selected ? null : (
+    return editing ? null : (
       <text x={ann.x} y={ann.y + ann.fontSize} fill={ann.color} fontSize={ann.fontSize} fontFamily="Outfit, sans-serif">
         {ann.text}
       </text>

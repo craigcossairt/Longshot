@@ -2,7 +2,8 @@ import { slugify } from "@/lib/utils";
 import type { AppSettings, CaptureRecord, ImageFormat } from "@/lib/types";
 
 export function extensionFor(format: ImageFormat) {
-  return format === "jpeg" ? "jpg" : format;
+  if (format === "jpeg") return "jpg";
+  return format;
 }
 
 export function buildFilename(capture: Pick<CaptureRecord, "title" | "url" | "width" | "height" | "format" | "createdAt">, settings: AppSettings) {

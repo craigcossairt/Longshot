@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as EditorRouteImport } from './routes/editor'
+import { Route as FilesRouteImport } from './routes/files'
 import { Route as InstallRouteImport } from './routes/install'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as FramesCommentsRouteImport } from './routes/frames.comments'
@@ -24,6 +25,11 @@ const IndexRoute = IndexRouteImport.update({
 const EditorRoute = EditorRouteImport.update({
   id: '/editor',
   path: '/editor',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FilesRoute = FilesRouteImport.update({
+  id: '/files',
+  path: '/files',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InstallRoute = InstallRouteImport.update({
@@ -50,6 +56,7 @@ const PSlugRoute = PSlugRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/editor': typeof EditorRoute
+  '/files': typeof FilesRoute
   '/install': typeof InstallRoute
   '/settings': typeof SettingsRoute
   '/frames/comments': typeof FramesCommentsRoute
@@ -58,6 +65,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/editor': typeof EditorRoute
+  '/files': typeof FilesRoute
   '/install': typeof InstallRoute
   '/settings': typeof SettingsRoute
   '/frames/comments': typeof FramesCommentsRoute
@@ -67,6 +75,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/editor': typeof EditorRoute
+  '/files': typeof FilesRoute
   '/install': typeof InstallRoute
   '/settings': typeof SettingsRoute
   '/frames/comments': typeof FramesCommentsRoute
@@ -75,14 +84,27 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/editor' | '/install' | '/settings' | '/frames/comments' | '/p/$slug'
+    | '/'
+    | '/editor'
+    | '/files'
+    | '/install'
+    | '/settings'
+    | '/frames/comments'
+    | '/p/$slug'
   fileRoutesByTo: FileRoutesByTo
   to:
-    '/' | '/editor' | '/install' | '/settings' | '/frames/comments' | '/p/$slug'
+    | '/'
+    | '/editor'
+    | '/files'
+    | '/install'
+    | '/settings'
+    | '/frames/comments'
+    | '/p/$slug'
   id:
     | '__root__'
     | '/'
     | '/editor'
+    | '/files'
     | '/install'
     | '/settings'
     | '/frames/comments'
@@ -92,6 +114,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   EditorRoute: typeof EditorRoute
+  FilesRoute: typeof FilesRoute
   InstallRoute: typeof InstallRoute
   SettingsRoute: typeof SettingsRoute
   FramesCommentsRoute: typeof FramesCommentsRoute
@@ -112,6 +135,13 @@ declare module '@tanstack/react-router' {
       path: '/editor'
       fullPath: '/editor'
       preLoaderRoute: typeof EditorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/files': {
+      id: '/files'
+      path: '/files'
+      fullPath: '/files'
+      preLoaderRoute: typeof FilesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/install': {
@@ -148,6 +178,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   EditorRoute: EditorRoute,
+  FilesRoute: FilesRoute,
   InstallRoute: InstallRoute,
   SettingsRoute: SettingsRoute,
   FramesCommentsRoute: FramesCommentsRoute,

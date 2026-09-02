@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Camera, Settings } from "lucide-react";
+import { List, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function AppHeader({ className }: { className?: string }) {
@@ -11,9 +11,7 @@ export function AppHeader({ className }: { className?: string }) {
       )}
     >
       <Link to="/" className="flex items-center gap-2.5 text-fg">
-        <span className="flex size-8 items-center justify-center rounded-md bg-surface-2 text-primary">
-          <Camera className="size-4" />
-        </span>
+        <img src="/favicon-48.png" alt="" width={32} height={32} className="size-8 rounded-md" />
         <span className="font-display text-xl tracking-tight">Longshot</span>
       </Link>
       <nav className="flex items-center gap-1 text-sm">
@@ -28,6 +26,13 @@ export function AppHeader({ className }: { className?: string }) {
           className="rounded-md px-3 py-2 text-muted transition-colors hover:bg-surface-2 hover:text-fg"
         >
           Extension
+        </Link>
+        <Link
+          to="/files"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+          aria-label="Files"
+        >
+          <List className="size-4" />
         </Link>
         <Link
           to="/settings"

@@ -205,6 +205,7 @@ export async function captureElement(node: HTMLElement, meta: CaptureMeta): Prom
       width: sized.width,
       height: sized.height,
       format: settings.format,
+      byteSize: blob.size,
     };
   } finally {
     restoreSvgs();
@@ -237,6 +238,7 @@ export async function captureFromFile(file: File): Promise<CaptureRecord> {
     width: sized.width,
     height: sized.height,
     format: settings.format,
+    byteSize: blob.size,
   };
 }
 
@@ -264,5 +266,6 @@ export async function captureFromDataUrl(dataUrl: string, title = "Pasted captur
     width: sized.width,
     height: sized.height,
     format: settings.format,
+    byteSize: blob.size,
   };
 }

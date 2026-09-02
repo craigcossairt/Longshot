@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useSettings } from "@/lib/settings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -5,7 +6,23 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  clearDownloadDirHandle,
+  getDownloadDirHandle,
+  pickDownloadDirectory,
+} from "@/lib/download-folder";
 import type { ImageFormat } from "@/lib/types";
+import {
+  FORMAT_OPTIONS,
+  maxFileHint,
+  maxHeightHint,
+  maxWidthHint,
+  qualityHint,
+  scaleHint,
+  usesQuality,
+} from "@/lib/formats";
+import { cn } from "@/lib/utils";
 
 const FILE_SIZE_OPTIONS = [
   { value: "0", label: "No limit" },
@@ -19,9 +36,30 @@ const FILE_SIZE_OPTIONS = [
 
 export function SettingsForm() {
   const settings = useSettings();
+  const [folderLabel, setFolderLabel] = useState("");
   const fileSizeValue = FILE_SIZE_OPTIONS.some((o) => Number(o.value) === settings.maxFileMB)
     ? String(settings.maxFileMB)
     : "0";
+
+  useEffect(() => {
+    void getDownloadDirHandle().then((handle) => setFolderLabel(handle?.name ?? ""));
+  }, []);
+
+  async function browseFolder() {
+    try {
+      const name = await pickDownloadDirectory();
+      setFolderLabel(name);
+      settings.update({ downloadDirectory: name });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+    }
+  }
+
+  async function resetAll() {
+    await clearDownloadDirHandle();
+    setFolderLabel("");
+    settings.reset();
+  }
 
   return (
     <div className="space-y-8">
@@ -35,22 +73,27 @@ export function SettingsForm() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="png">PNG — sharp, larger</SelectItem>
-              <SelectItem value="jpeg">JPEG — photos, smaller</SelectItem>
-              <SelectItem value="webp">WebP — sharp and light</SelectItem>
+              {FORMAT_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </Field>
 
-        {settings.format !== "png" && (
+        {usesQuality(settings.format) && (
           <Field label={`Quality · ${Math.round(settings.quality * 100)}%`}>
             <Slider
-              min={0.5}
-              max={1}
-              step={0.02}
-              value={[settings.quality]}
-              onValueChange={([quality]) => settings.update({ quality })}
+              min={50}
+              max={100}
+              step={1}
+              value={[Math.round(settings.quality * 100)]}
+              onValueChange={([pct]) => settings.update({ quality: (pct ?? 92) / 100 })}
             />
+            <Hint warn={qualityHint(Math.round(settings.quality * 100)).warn}>
+              {qualityHint(Math.round(settings.quality * 100)).text}
+            </Hint>
           </Field>
         )}
 
@@ -65,14 +108,26 @@ export function SettingsForm() {
         </Field>
 
         <Field label="Download folder">
-          <Input
-            value={settings.downloadDirectory}
-            onChange={(e) => settings.update({ downloadDirectory: e.target.value })}
-            placeholder="Longshot"
-          />
+          <div className="flex gap-2">
+            <Input
+              value={folderLabel || settings.downloadDirectory}
+              onChange={(e) => {
+                if (folderLabel) {
+                  void clearDownloadDirHandle();
+                  setFolderLabel("");
+                }
+                settings.update({ downloadDirectory: e.target.value || "Longshot" });
+              }}
+              placeholder="Longshot"
+            />
+            <Button type="button" variant="secondary" onClick={() => void browseFolder()}>
+              Browse
+            </Button>
+          </div>
           <p className="mt-1.5 text-xs text-muted">
-            Used as a subfolder of Downloads in the browser extension. In this studio, Save as
-            lets you pick any folder.
+            {folderLabel
+              ? `Saving to “${folderLabel}” on this PC. Edit the name to use a Downloads folder instead.`
+              : "Default is Downloads/Longshot. Browse to pick Pictures, Documents, or any folder on this PC."}
           </p>
         </Field>
       </Section>
@@ -130,6 +185,7 @@ export function SettingsForm() {
               value={settings.maxWidth}
               onChange={(e) => settings.update({ maxWidth: Number(e.target.value) || 0 })}
             />
+            <Hint warn={maxWidthHint(settings.maxWidth).warn}>{maxWidthHint(settings.maxWidth).text}</Hint>
           </Field>
           <Field label="Max height (px)">
             <Input
@@ -139,6 +195,7 @@ export function SettingsForm() {
               value={settings.maxHeight}
               onChange={(e) => settings.update({ maxHeight: Number(e.target.value) || 0 })}
             />
+            <Hint warn={maxHeightHint(settings.maxHeight).warn}>{maxHeightHint(settings.maxHeight).text}</Hint>
           </Field>
           <Field label={`Scale ${settings.scalePercent}%`}>
             <Slider
@@ -148,6 +205,7 @@ export function SettingsForm() {
               value={[settings.scalePercent]}
               onValueChange={([scalePercent]) => settings.update({ scalePercent })}
             />
+            <Hint warn={scaleHint(settings.scalePercent).warn}>{scaleHint(settings.scalePercent).text}</Hint>
           </Field>
         </div>
         <Field label="Max file size">
@@ -166,18 +224,11 @@ export function SettingsForm() {
               ))}
             </SelectContent>
           </Select>
-          <p className="mt-1.5 text-xs text-muted">
-            If the capture would exceed this size, it is scaled down (and JPEG/WebP quality is
-            lowered) until it fits.
-          </p>
+          <Hint warn={maxFileHint(settings.maxFileMB).warn}>{maxFileHint(settings.maxFileMB).text}</Hint>
         </Field>
-        <p className="text-xs text-muted">
-          The image is scaled uniformly so it stays inside both pixel limits. 100% keeps native
-          pixels unless the file would exceed the box or the max file size.
-        </p>
       </Section>
 
-      <Button variant="secondary" onClick={() => settings.reset()}>
+      <Button variant="secondary" onClick={() => void resetAll()}>
         Reset to defaults
       </Button>
     </div>
@@ -186,11 +237,13 @@ export function SettingsForm() {
 
 function Section({ title, note, children }: { title: string; note: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-border bg-surface p-5 md:p-6">
-      <h2 className="font-display text-2xl">{title}</h2>
-      <p className="mt-1 mb-5 text-sm text-muted">{note}</p>
-      <div className="space-y-5">{children}</div>
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{note}</CardDescription>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   );
 }
 
@@ -201,6 +254,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </div>
   );
+}
+
+function Hint({ warn, children }: { warn?: boolean; children: React.ReactNode }) {
+  return <p className={cn("mt-1.5 text-xs", warn ? "text-danger" : "text-muted")}>{children}</p>;
 }
 
 function Toggle({

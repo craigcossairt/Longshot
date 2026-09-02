@@ -18,7 +18,7 @@ export function ThreadPage() {
           leftover frameset keeps its own scrollbar.
         </p>
         <p>
-          Longshot can expand those inner documents before the stitch — same-origin frames only,
+          Longshot can expand those inner documents before the stitch. Same-origin frames only,
           which is the honest limit of the web. The pane below is a live iframe. Turn on “Scroll
           inner frames” in Settings, capture this page, and the full conversation is in the file.
           Turn it off and you get the clipped viewport.

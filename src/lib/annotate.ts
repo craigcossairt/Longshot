@@ -3,7 +3,7 @@ import type { Annotation, Point } from "@/lib/types";
 export const DRAW_COLORS = [
   "#e15a4a",
   "#e08a3c",
-  "#d2d6d0",
+  "#f0c14a",
   "#3d9a6a",
   "#4a7ec4",
   "#f7f7f2",
@@ -11,26 +11,12 @@ export const DRAW_COLORS = [
 ];
 
 export const STAMP_EMOJI = [
-  "⭐",
-  "✅",
-  "❌",
-  "❗",
-  "❓",
-  "➡️",
-  "⬅️",
-  "⬆️",
-  "⬇️",
-  "⭕",
-  "📌",
-  "👀",
-  "💡",
-  "🔥",
-  "👍",
-  "👎",
-  "❤️",
-  "🎯",
-  "💬",
-  "📝",
+  "😀", "😁", "😂", "🤣", "😊", "😍", "🤩", "😎",
+  "🤔", "😴", "😭", "😡", "🤯", "👋", "👍", "👎",
+  "👏", "🙏", "💪", "🔥", "⭐", "✨", "✅", "❌",
+  "❗", "❓", "➡️", "⬅️", "⬆️", "⬇️", "⭕", "📌",
+  "📍", "👀", "💡", "💬", "📝", "🎯", "❤️", "💔",
+  "🎉", "🚀", "⚠️", "🕒", "📎", "🔗", "📷", "🖥️",
 ];
 
 export function normRect(ann: { x: number; y: number; w: number; h: number }) {
@@ -107,6 +93,35 @@ export function fillArrow(
   ctx.fill();
 }
 
+export function annotationBounds(ann: Annotation) {
+  switch (ann.type) {
+    case "pen":
+    case "highlight": {
+      const xs = ann.points.map((p) => p.x);
+      const ys = ann.points.map((p) => p.y);
+      const pad = Math.max(8, ann.strokeWidth);
+      return {
+        x: Math.min(...xs) - pad,
+        y: Math.min(...ys) - pad,
+        w: Math.max(...xs) - Math.min(...xs) + pad * 2,
+        h: Math.max(...ys) - Math.min(...ys) + pad * 2,
+      };
+    }
+    case "text":
+      return { x: ann.x, y: ann.y, w: ann.w, h: ann.fontSize * 3.2 };
+    case "emoji":
+      return { x: ann.x, y: ann.y, w: ann.size, h: ann.size };
+    case "line":
+    case "arrow": {
+      const x = Math.min(ann.x, ann.x + ann.w);
+      const y = Math.min(ann.y, ann.y + ann.h);
+      return { x, y, w: Math.abs(ann.w), h: Math.abs(ann.h) };
+    }
+    default:
+      return normRect(ann);
+  }
+}
+
 export function hitTest(ann: Annotation, p: Point): boolean {
   if (ann.type === "pen" || ann.type === "highlight") {
     const tol = Math.max(10, ann.strokeWidth);
@@ -146,6 +161,75 @@ export function moveAnnotation(ann: Annotation, dx: number, dy: number): Annotat
   }
 }
 
+export function resizeAnnotation(ann: Annotation, handle: string, dx: number, dy: number): Annotation {
+  switch (ann.type) {
+    case "pen":
+    case "highlight":
+      return moveAnnotation(ann, dx, dy);
+    case "emoji": {
+      const size = Math.max(
+        16,
+        ann.size +
+          (handle.includes("e") ? dx : handle.includes("w") ? -dx : 0) +
+          (handle.includes("s") ? dy : handle.includes("n") ? -dy : 0),
+      );
+      let { x, y } = ann;
+      if (handle.includes("w")) x += ann.size - size;
+      if (handle.includes("n")) y += ann.size - size;
+      return { ...ann, x, y, size };
+    }
+    case "text": {
+      const w = Math.max(40, ann.w + (handle.includes("e") ? dx : handle.includes("w") ? -dx : 0));
+      const fontSize = Math.max(12, ann.fontSize + (handle.includes("s") ? dy * 0.4 : handle.includes("n") ? -dy * 0.4 : 0));
+      const x = handle.includes("w") ? ann.x + (ann.w - w) : ann.x;
+      const y = handle.includes("n") ? ann.y + (ann.fontSize - fontSize) : ann.y;
+      return { ...ann, x, y, w, fontSize };
+    }
+    default: {
+      const next = { ...ann };
+      if (handle.includes("e")) next.w += dx;
+      if (handle.includes("s")) next.h += dy;
+      if (handle.includes("w")) {
+        next.x += dx;
+        next.w -= dx;
+      }
+      if (handle.includes("n")) {
+        next.y += dy;
+        next.h -= dy;
+      }
+      return next;
+    }
+  }
+}
+
 export function offsetAll(annotations: Annotation[], dx: number, dy: number): Annotation[] {
   return annotations.map((ann) => moveAnnotation(ann, dx, dy));
+}
+
+export function resizeRect(rect: { x: number; y: number; w: number; h: number }, handle: string, dx: number, dy: number) {
+  const next = { ...rect };
+  if (handle.includes("e")) next.w += dx;
+  if (handle.includes("s")) next.h += dy;
+  if (handle.includes("w")) {
+    next.x += dx;
+    next.w -= dx;
+  }
+  if (handle.includes("n")) {
+    next.y += dy;
+    next.h -= dy;
+  }
+  return next;
+}
+
+export function handlePoints(b: { x: number; y: number; w: number; h: number }) {
+  return {
+    nw: { x: b.x, y: b.y },
+    n: { x: b.x + b.w / 2, y: b.y },
+    ne: { x: b.x + b.w, y: b.y },
+    e: { x: b.x + b.w, y: b.y + b.h / 2 },
+    se: { x: b.x + b.w, y: b.y + b.h },
+    s: { x: b.x + b.w / 2, y: b.y + b.h },
+    sw: { x: b.x, y: b.y + b.h },
+    w: { x: b.x, y: b.y + b.h / 2 },
+  };
 }

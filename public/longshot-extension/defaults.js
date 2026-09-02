@@ -7,6 +7,7 @@ const LONGSHOT_DEFAULTS = {
   autoDownload: false,
   saveAsDialog: true,
   downloadDirectory: "Longshot",
+  downloadFolderLabel: "",
   filenameTemplate: "{title}-{date}",
   maxWidth: 8192,
   maxHeight: 32768,

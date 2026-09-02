@@ -1,3 +1,16 @@
+importScripts("folder.js", "history.js");
+
+function mimeFor(format) {
+  if (format === "jpeg") return "image/jpeg";
+  if (format === "webp") return "image/webp";
+  if (format === "avif") return "image/avif";
+  return "image/png";
+}
+
+function usesQuality(format) {
+  return format === "jpeg" || format === "webp" || format === "avif";
+}
+
 const DEFAULTS = {
   format: "png",
   quality: 0.92,
@@ -7,6 +20,7 @@ const DEFAULTS = {
   autoDownload: false,
   saveAsDialog: true,
   downloadDirectory: "Longshot",
+  downloadFolderLabel: "",
   filenameTemplate: "{title}-{date}",
   maxWidth: 8192,
   maxHeight: 32768,
@@ -14,11 +28,34 @@ const DEFAULTS = {
   maxFileMB: 0,
 };
 
+let captureInFlight = false;
+let lastCaptureAt = 0;
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "LONGSHOT_CAPTURE") {
+    if (captureInFlight) {
+      sendResponse({ ok: false, error: "Capture already in progress" });
+      return;
+    }
+    captureInFlight = true;
     captureActive(msg.mode || "full")
-      .then(() => sendResponse({ ok: true }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+      .then(() => {
+        try {
+          sendResponse({ ok: true });
+        } catch {
+          /* popup closed */
+        }
+      })
+      .catch((error) => {
+        try {
+          sendResponse({ ok: false, error: friendlyError(error) });
+        } catch {
+          /* popup closed */
+        }
+      })
+      .finally(() => {
+        captureInFlight = false;
+      });
     return true;
   }
   if (msg.type === "LONGSHOT_EXPORT") {
@@ -46,6 +83,50 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isQuotaError(error) {
+  return /MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i.test(String(error?.message || error));
+}
+
+function friendlyError(error) {
+  const message = String(error?.message || error || "Capture failed");
+  if (isQuotaError(error)) {
+    return "Chrome limited screenshot speed. Wait a second and try again.";
+  }
+  return message;
+}
+
+function report(text, meta = {}) {
+  chrome.runtime.sendMessage({ type: "LONGSHOT_STATUS", text, ...meta }, () => {
+    void chrome.runtime.lastError;
+  });
+}
+
+function captureGapMs() {
+  const perSecond = chrome.tabs.MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND || 2;
+  return Math.ceil(1000 / perSecond) + 80;
+}
+
+async function captureVisibleTabPaced(windowId) {
+  const gap = captureGapMs();
+  const wait = lastCaptureAt + gap - Date.now();
+  if (wait > 0) await delay(wait);
+
+  let lastError;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    lastCaptureAt = Date.now();
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+      if (!dataUrl) throw new Error("Empty capture");
+      return dataUrl;
+    } catch (error) {
+      lastError = error;
+      if (!isQuotaError(error)) throw error;
+      await delay(1000 + attempt * 250);
+    }
+  }
+  throw lastError;
+}
+
 function positions(full, view) {
   if (full <= view) return [0];
   const list = [];
@@ -67,24 +148,53 @@ async function captureActive(mode) {
     type: "LONGSHOT_MEASURE",
     expandFrames: settings.captureIframes,
   });
-  await delay(120);
   const orig = { x: dim.scrollX, y: dim.scrollY };
   const fullW = mode === "visible" ? dim.viewportWidth : dim.scrollWidth;
   const fullH = mode === "visible" ? dim.viewportHeight : dim.scrollHeight;
   const xs = mode === "visible" ? [dim.scrollX] : positions(fullW, dim.viewportWidth);
   const ys = mode === "visible" ? [dim.scrollY] : positions(fullH, dim.viewportHeight);
   const shots = [];
-  for (const y of ys) {
-    for (const x of xs) {
-      if (mode === "full") {
-        await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SCROLL", x, y });
-        await delay(220);
+  try {
+    await delay(120);
+    const total = xs.length * ys.length;
+    let index = 0;
+    for (const y of ys) {
+      for (const x of xs) {
+        index += 1;
+        report(total > 1 ? `Capturing ${index} of ${total}` : "Capturing", {
+          index,
+          total,
+          phase: "capture",
+        });
+        if (mode === "full") {
+          const pos = await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SCROLL", x, y });
+          await delay(180);
+          if (index > 1) {
+            await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_HIDE_CHROME" });
+            await delay(80);
+          }
+          const ax = Math.round(pos?.x ?? x);
+          const ay = Math.round(pos?.y ?? y);
+          if (shots.some((shot) => shot.x === ax && shot.y === ay)) continue;
+          const dataUrl = await captureVisibleTabPaced(tab.windowId);
+          shots.push({ x: ax, y: ay, dataUrl });
+        } else {
+          const dataUrl = await captureVisibleTabPaced(tab.windowId);
+          shots.push({ x: 0, y: 0, dataUrl });
+        }
       }
-      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-      shots.push({ x: mode === "visible" ? 0 : x, y: mode === "visible" ? 0 : y, dataUrl });
+    }
+  } finally {
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y });
+    } catch {
+      /* tab closed */
     }
   }
-  await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y });
+
+  if (!shots.length) throw new Error("Capture produced no frames");
+
+  report("Stitching", { index: shots.length, total: shots.length, phase: "stitch" });
 
   const dpr = dim.devicePixelRatio || 1;
   let canvas = await stitch(shots, fullW, fullH, dim.viewportWidth, dim.viewportHeight, dpr);
@@ -92,10 +202,19 @@ async function captureActive(mode) {
   canvas = fitLimits(canvas, settings);
   canvas = await fitFileSize(canvas, settings);
 
-  const mime = settings.format === "jpeg" ? "image/jpeg" : settings.format === "webp" ? "image/webp" : "image/png";
-  const blob = await canvas.convertToBlob({ type: mime, quality: settings.quality });
+  const mime = mimeFor(settings.format);
+  let blob;
+  try {
+    blob = await canvas.convertToBlob({
+      type: mime,
+      quality: usesQuality(settings.format) ? settings.quality : 1,
+    });
+  } catch {
+    throw new Error(`This browser cannot encode ${String(settings.format).toUpperCase()}`);
+  }
   const dataUrl = await blobToDataUrl(blob);
   const record = {
+    id: crypto.randomUUID(),
     title: dim.title,
     url: dim.url,
     dataUrl,
@@ -103,10 +222,12 @@ async function captureActive(mode) {
     height: canvas.height,
     format: settings.format,
     createdAt: Date.now(),
+    byteSize: blob.size,
   };
+  await longshotPushHistory(record);
   await chrome.storage.local.set({ longshotCurrent: record });
   if (settings.autoDownload) {
-    await downloadDataUrl(dataUrl, filename(record, settings), settings.saveAsDialog);
+    await saveExport(blob, filename(record, settings), settings);
   }
   await chrome.tabs.create({ url: chrome.runtime.getURL("editor.html") });
 }
@@ -171,12 +292,12 @@ function fitLimits(source, settings) {
 async function fitFileSize(source, settings) {
   const max = (Number(settings.maxFileMB) || 0) * 1024 * 1024;
   if (!max) return source;
-  const mime = settings.format === "jpeg" ? "image/jpeg" : settings.format === "webp" ? "image/webp" : "image/png";
+  const mime = mimeFor(settings.format);
   let canvas = source;
   let quality = settings.quality || 0.92;
   let blob = await canvas.convertToBlob({ type: mime, quality });
   if (blob.size <= max) return canvas;
-  if (settings.format !== "png") {
+  if (usesQuality(settings.format)) {
     for (const q of [0.82, 0.7, 0.58, 0.45, 0.32]) {
       quality = Math.min(quality, q);
       blob = await canvas.convertToBlob({ type: mime, quality });
@@ -194,7 +315,7 @@ async function fitFileSize(source, settings) {
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(canvas, 0, 0, w, h);
     canvas = next;
-    blob = await canvas.convertToBlob({ type: mime, quality: settings.format === "png" ? 1 : quality });
+    blob = await canvas.convertToBlob({ type: mime, quality: usesQuality(settings.format) ? quality : 1 });
     if (blob.size <= max) return canvas;
     if (w <= 256 || h <= 256) break;
   }
@@ -221,9 +342,14 @@ function filename(record, settings) {
     .replaceAll("{width}", String(record.width))
     .replaceAll("{height}", String(record.height));
   name = slugify(name);
-  const ext = record.format === "jpeg" ? "jpg" : record.format;
-  const folder = (settings.downloadDirectory || "Longshot").replace(/^\/+|\/+$/g, "");
-  return `${folder}/${name}.${ext}`;
+  const ext = record.format === "jpeg" ? "jpg" : record.format || "png";
+  const folder = String(settings.downloadDirectory || "Longshot")
+    .replace(/\\/g, "/")
+    .replace(/^[a-zA-Z]:/, "")
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\.\./g, "")
+    .replace(/\/+/g, "/");
+  return folder ? `${folder}/${name}.${ext}` : `${name}.${ext}`;
 }
 
 function blobToDataUrl(blob) {
@@ -244,18 +370,38 @@ async function downloadDataUrl(dataUrl, path, saveAs) {
   });
 }
 
+async function saveExport(blob, path, settings) {
+  const handle = await longshotGetDirHandle();
+  if (handle) {
+    try {
+      await longshotWriteToDir(handle, path, blob);
+      return;
+    } catch {
+      /* permission expired — fall back to Downloads */
+    }
+  }
+  const dataUrl = await blobToDataUrl(blob);
+  await downloadDataUrl(dataUrl, path, settings.saveAsDialog);
+}
+
 async function exportBlob(msg) {
   const settings = await getSettings();
-  const record = (await chrome.storage.local.get("longshotCurrent")).longshotCurrent;
-  if (!record) throw new Error("Nothing to export");
+  const stored = (await chrome.storage.local.get("longshotCurrent")).longshotCurrent;
+  const record = {
+    ...(stored || {}),
+    title: msg.title || stored?.title,
+    url: msg.url || stored?.url,
+    format: msg.format || stored?.format,
+    createdAt: msg.createdAt || stored?.createdAt,
+    width: msg.width || stored?.width,
+    height: msg.height || stored?.height,
+  };
+  if (!msg.dataUrl && !stored) throw new Error("Nothing to export");
+  const blob = await (await fetch(msg.dataUrl || stored.dataUrl)).blob();
   if (msg.kind === "pdf") {
-    await chrome.downloads.download({
-      url: msg.dataUrl,
-      filename: filename(record, settings).replace(/\.[^.]+$/, ".pdf"),
-      saveAs: Boolean(settings.saveAsDialog),
-    });
+    await saveExport(blob, filename(record, settings).replace(/\.[^.]+$/, ".pdf"), settings);
     return;
   }
   const path = filename({ ...record, format: msg.format || record.format }, settings);
-  await downloadDataUrl(msg.dataUrl, path, settings.saveAsDialog);
+  await saveExport(blob, path, settings);
 }

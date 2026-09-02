@@ -1,0 +1,55 @@
+:root {
+  --bg: #0e0e10;
+  --surface: #17171a;
+  --surface-2: #1e1e22;
+  --fg: #f1f0ec;
+  --muted: #8c8b86;
+  --primary: #d2d6d0;
+  --primary-fg: #0e0e10;
+  --border: #2a2a2e;
+  --danger: #c45c4a;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.45 system-ui, "Segoe UI", sans-serif;
+}
+.shell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg);
+  text-decoration: none;
+  font-family: Georgia, "Iowan Old Style", serif;
+  font-size: 22px;
+}
+.brand img { width: 28px; height: 28px; display: block; }
+.shell-nav { display: flex; align-items: center; gap: 4px; }
+.shell-nav a, .shell-nav button.icon {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  border: 0;
+  background: transparent;
+}
+.shell-nav a:hover, .shell-nav a.on, .shell-nav button.icon:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.shell-nav svg { width: 18px; height: 18px; }

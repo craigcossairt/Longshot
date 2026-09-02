@@ -71,6 +71,40 @@
   }
 }
 
+@keyframes longshot-indet {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+
+@keyframes longshot-sheen {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-indet {
+  animation: longshot-indet 1.25s ease-in-out infinite;
+}
+
+.animate-sheen {
+  animation: longshot-sheen 1.2s ease-in-out infinite;
+}
+
+.progress-sheen-layer {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.28), transparent);
+  animation: longshot-sheen 1.2s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

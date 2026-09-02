@@ -57,7 +57,7 @@ function Home() {
           <h1 className="font-display mt-4 text-4xl leading-tight md:text-6xl">The whole page, in one shot.</h1>
           <p className="mt-5 max-w-xl text-lg leading-relaxed text-muted">
             A GoFullPage replacement you control. Capture long pages, scroll nested frames, crop,
-            annotate, and export PNG, JPEG, WebP, or PDF.
+            annotate, and export PNG, JPEG, WebP, AVIF, or PDF.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Button onClick={() => setPending("field-notes")} disabled={busy}>
@@ -125,7 +125,7 @@ function Home() {
                   }
                   toast.error("Clipboard has no image");
                 } catch {
-                  toast.error("Could not read clipboard — copy a screenshot and press Ctrl+V");
+                  toast.error("Could not read clipboard. Copy a screenshot and press Ctrl+V");
                 }
               }}
             >
@@ -154,12 +154,12 @@ function Home() {
             {
               icon: Crop,
               title: "Crop and mark up",
-              body: "Crop, draw, type, stamp, drop images, and redact — then right-click to export.",
+              body: "Crop, draw, type, stamp, drop images, and redact, then right-click to export.",
             },
             {
               icon: Download,
               title: "Copy, file, PDF",
-              body: "Copy to clipboard, download PNG/JPEG/WebP, or save a one-page PDF.",
+              body: "Copy to clipboard, download PNG, JPEG, WebP, or AVIF, or save a one-page PDF.",
             },
             {
               icon: Camera,
