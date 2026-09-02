@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Longshot</title>
+    <style>
+      :root {
+        --bg: #0e0e10;
+        --fg: #f1f0ec;
+        --muted: #8c8b86;
+        --surface: #17171a;
+        --border: #2a2a2e;
+        --primary: #d2d6d0;
+        --primary-fg: #0e0e10;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        width: 260px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.4 Outfit, system-ui, sans-serif;
+      }
+      h1 { font-family: Georgia, serif; font-size: 22px; font-weight: 500; margin: 0; }
+      header { padding: 16px 16px 8px; }
+      p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+      .stack { display: grid; gap: 8px; padding: 8px 16px 16px; }
+      button {
+        height: 40px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--fg);
+        font: 500 13px/1 Outfit, system-ui, sans-serif;
+        cursor: pointer;
+      }
+      button.primary { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+      button.link { background: transparent; border: 0; height: 36px; color: var(--muted); }
+      #status { min-height: 16px; padding: 0 16px 12px; font-size: 12px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Longshot</h1>
+      <p>Capture the tab, then edit in a new window.</p>
+    </header>
+    <div class="stack">
+      <button class="primary" id="full">Capture full page</button>
+      <button id="visible">Visible viewport</button>
+      <button class="link" id="options">Settings</button>
+    </div>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

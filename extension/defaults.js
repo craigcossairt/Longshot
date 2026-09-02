@@ -1,0 +1,15 @@
+const LONGSHOT_DEFAULTS = {
+  format: "png",
+  quality: 0.92,
+  captureIframes: true,
+  includeBrowserBar: false,
+  includeUrlBar: false,
+  autoDownload: false,
+  saveAsDialog: true,
+  downloadDirectory: "Longshot",
+  filenameTemplate: "{title}-{date}",
+  maxWidth: 8192,
+  maxHeight: 32768,
+  scalePercent: 100,
+  maxFileMB: 0,
+};
