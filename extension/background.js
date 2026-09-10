@@ -26,6 +26,34 @@ function canInjectIntoTab(url) {
   return true;
 }
 
+function isOwnExtensionPage(url) {
+  try {
+    return Boolean(url && url.startsWith(chrome.runtime.getURL("")));
+  } catch {
+    return false;
+  }
+}
+
+function sendToTab(tabId, msg, ownPage) {
+  if (!ownPage) return chrome.tabs.sendMessage(tabId, msg);
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ ...msg, longshotTargetTabId: tabId }, (res) => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message));
+      else resolve(res);
+    });
+  });
+}
+
+function stackVertical(top, bottom) {
+  const w = Math.max(top.width, bottom.width);
+  const canvas = createCanvas(w, top.height + bottom.height);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(top, 0, 0);
+  ctx.drawImage(bottom, 0, top.height);
+  return canvas;
+}
+
 function createCanvas(width, height) {
   return new OffscreenCanvas(width, height);
 }
@@ -126,6 +154,7 @@ function flashBadge(text) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.longshotTargetTabId != null) return;
   if (msg.type === "LONGSHOT_OFFSCREEN_COPY") return;
   if (msg.type === "LONGSHOT_CAPTURE") {
     void chrome.action.setBadgeText({ text: "" });
@@ -283,7 +312,8 @@ async function captureActive(mode) {
     throw new Error("This page cannot be captured");
   }
   const settings = await getSettings();
-  if (!canInjectIntoTab(tab.url)) {
+  const ownPage = isOwnExtensionPage(tab.url);
+  if (!ownPage && !canInjectIntoTab(tab.url)) {
     if (mode === "region") {
       throw new Error("Area select is not available on this page. Use visible or full page.");
     }
@@ -291,15 +321,33 @@ async function captureActive(mode) {
     return;
   }
   if (mode === "region") {
+    if (ownPage) throw new Error("Area select is not available on this page.");
     await captureRegion(tab, settings);
     return;
   }
-  await ensureContent(tab.id);
-  const dim = await chrome.tabs.sendMessage(tab.id, {
-    type: "LONGSHOT_MEASURE",
-    expandFrames: settings.captureIframes,
-    findOverflow: Boolean(settings.captureOverflow && mode === "full"),
-  });
+  if (ownPage && mode === "visible") {
+    await captureVisibleOnly(tab, settings);
+    return;
+  }
+  if (ownPage) {
+    try {
+      await sendToTab(tab.id, { type: "LONGSHOT_PING" }, true);
+    } catch {
+      await captureVisibleOnly(tab, settings);
+      return;
+    }
+  } else {
+    await ensureContent(tab.id);
+  }
+  const dim = await sendToTab(
+    tab.id,
+    {
+      type: "LONGSHOT_MEASURE",
+      expandFrames: Boolean(!ownPage && settings.captureIframes),
+      findOverflow: Boolean(settings.captureOverflow && mode === "full"),
+    },
+    ownPage,
+  );
   const overflow = mode === "full" && dim?.overflow;
   const captureDim = overflow
     ? {
@@ -314,16 +362,27 @@ async function captureActive(mode) {
     : dim;
   let lastCrop = overflow?.crop || null;
   const dpr = dim.devicePixelRatio || 1;
+  const shellH = overflow?.crop?.y || 0;
+  let shellCanvas = null;
+  if (mode === "full" && shellH > 8) {
+    const shellShot = await captureVisibleTabPaced(tab.windowId);
+    shellCanvas = await cropVisible(
+      shellShot,
+      { x: 0, y: 0, w: dim.viewportWidth, h: shellH },
+      dpr,
+      { decode, createCanvas },
+    );
+  }
   const result = await runTiledCapture({
     mode,
     dim: captureDim,
     scroll: async (x, y) => {
-      const pos = await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SCROLL", x, y });
+      const pos = await sendToTab(tab.id, { type: "LONGSHOT_SCROLL", x, y }, ownPage);
       if (pos?.crop) lastCrop = pos.crop;
       return pos;
     },
-    hideChrome: () => chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_HIDE_CHROME" }),
-    reset: (orig) => chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y }),
+    hideChrome: () => sendToTab(tab.id, { type: "LONGSHOT_HIDE_CHROME" }, ownPage),
+    reset: (orig) => sendToTab(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y }, ownPage),
     captureTile: async () => {
       const dataUrl = await captureVisibleTabPaced(tab.windowId);
       if (!lastCrop?.w || !lastCrop?.h) return dataUrl;
@@ -341,6 +400,7 @@ async function captureActive(mode) {
     { fullW: result.fullW, fullH: result.fullH, dpr },
     { decode, createCanvas },
   );
+  if (shellCanvas) canvas = stackVertical(shellCanvas, canvas);
   canvas = compositeChrome(canvas, dim, settings);
   await finishCapture(canvas, dim, settings);
 }

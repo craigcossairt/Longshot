@@ -121,6 +121,8 @@ export function bindOverflowCapture(policy) {
     } catch {
       /* ignore */
     }
+    el.scrollLeft = 0;
+    el.scrollTop = 0;
     return {
       scrollLeft: el.scrollLeft,
       scrollTop: el.scrollTop,

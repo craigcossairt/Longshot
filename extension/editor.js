@@ -1,6 +1,9 @@
 import { jpegToPdfBlob } from "./core/pdf.js";
 import { sendLongshotFeedback } from "./feedback.js";
+import { installHostCapture } from "./host-capture.js";
 import { longshotByteSize, longshotHistoryGet, longshotPushHistory } from "./history.js";
+
+installHostCapture();
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
