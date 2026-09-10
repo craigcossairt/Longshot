@@ -17,7 +17,17 @@ jobs:
           find extension cli test tools \( -name '*.js' -o -name '*.mjs' \) | while read -r f; do
             node --check "$f"
           done
+      - name: CLI dependencies
+        working-directory: cli
+        run: npm ci
       - name: Tests
-        run: node --test test/core/*.test.mjs test/cli/*.test.mjs
+        run: node --test test/core/*.test.mjs test/cli/args.test.mjs
+      - name: CSP capture
+        working-directory: cli
+        env:
+          LONGSHOT_CHANNEL: chromium
+        run: |
+          npx playwright install --with-deps chromium
+          node --test ../test/cli/csp.test.mjs
       - name: Manifest and package
         run: node tools/pack-extension.mjs artifacts/longshot-extension.zip

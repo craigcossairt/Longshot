@@ -46,6 +46,8 @@ node longshot.mjs --url file://$PWD/../test/fixtures/overflow.html --full-page -
 
 `--cdp ws://127.0.0.1:9222` attaches to a Chrome started with `--remote-debugging-port=9222`. There is no native-messaging host in this release.
 
+Launched browsers set `bypassCSP` so pages with `default-src 'self'` still capture (`addStyleTag` and in-page `data:` fetches). `--cdp` reuses the attached browser's existing context and does **not** set `bypassCSP`; CSP-restricted pages over CDP are not covered.
+
 ## URLs
 
 `--url` accepts `http:`, `https:`, and `file:`. Local files are supported on

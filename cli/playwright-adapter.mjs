@@ -65,10 +65,13 @@ async function withBrowser(options, fn) {
 }
 
 async function preparePage(browser, options) {
-  const context = options.cdp ? browser.contexts()[0] || (await browser.newContext()) : await browser.newContext({
-    viewport: { width: options.viewport.width, height: options.viewport.height },
-    deviceScaleFactor: options.viewport.scale,
-  });
+  const context = options.cdp
+    ? browser.contexts()[0] || (await browser.newContext())
+    : await browser.newContext({
+        viewport: { width: options.viewport.width, height: options.viewport.height },
+        deviceScaleFactor: options.viewport.scale,
+        bypassCSP: true,
+      });
   const page = options.cdp ? context.pages()[0] || (await context.newPage()) : await context.newPage();
   if (options.cdp) {
     await page.setViewportSize({ width: options.viewport.width, height: options.viewport.height });
