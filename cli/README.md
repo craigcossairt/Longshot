@@ -12,7 +12,8 @@ node longshot.mjs --url https://example.com --full-page --out capture.png
 
 Playwright is a devDependency. The default `--channel chrome` uses the Chrome already on the machine. It does not download a browser. Use `--channel chromium` only if you have installed Playwright's Chromium.
 
-Progress goes to stderr. One JSON object goes to stdout:
+Progress goes to stderr. One JSON object goes to stdout. Exit 5 means the capture
+succeeded and `--baseline` reported a change.
 
 ```
 node longshot.mjs --url https://example.com --full-page --out capture.png | jq -r .path
@@ -44,9 +45,15 @@ node longshot.mjs --url file://$PWD/../test/fixtures/overflow.html --full-page -
 
 ## Logged-in pages
 
-`--cdp ws://127.0.0.1:9222` attaches to a Chrome started with `--remote-debugging-port=9222`. There is no native-messaging host in this release.
+`--cdp ws://127.0.0.1:9222` attaches to a Chrome started with `--remote-debugging-port=9222`. There is no native-messaging host in this release. Image tiles are passed into the page as `Blob`s, so a logged-in page whose CSP omits `data:` from `connect-src` still captures without overriding that browser's CSP.
 
-Launched browsers set `bypassCSP` so pages with `default-src 'self'` still capture (`addStyleTag` and in-page `data:` fetches). `--cdp` reuses the attached browser's existing context and does **not** set `bypassCSP`; CSP-restricted pages over CDP are not covered.
+## Baseline / diff
+
+Every capture writes `<out>.verdict.json` next to the image (dimensions, format, engine, tiles, URL, sha256, 8×8 region hashes). Compare later with `--baseline prior.verdict.json`.
+
+Comparison is structural (size, format, engine, tiles, URL) plus region hashes. Up to 5% of blocks may differ to absorb encoder/GPU noise. Full-file sha256 is recorded but is not the pass/fail gate. A missing or unreadable baseline is divergence, never success.
+
+Exit `5` means the capture succeeded and the page changed. That is not exit `1` (capture failed).
 
 ## URLs
 

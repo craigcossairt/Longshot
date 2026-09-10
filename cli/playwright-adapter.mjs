@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { chromium } from "playwright";
+import { REGION_GRID, sha256 } from "./verdict.mjs";
 import {
   CAPTURE_DELAYS,
   DEFAULTS,
@@ -35,6 +36,16 @@ function progress(message) {
 
 function bufToDataUrl(buf) {
   return `data:image/png;base64,${Buffer.from(buf).toString("base64")}`;
+}
+
+function dataUrlToBytes(dataUrl) {
+  const comma = String(dataUrl).indexOf(",");
+  return new Uint8Array(Buffer.from(String(dataUrl).slice(comma + 1), "base64"));
+}
+
+function asUint8(value) {
+  if (value instanceof Uint8Array) return value;
+  return new Uint8Array(value);
 }
 
 async function withBrowser(options, fn) {
@@ -113,19 +124,20 @@ async function captureViewportPng(page) {
 }
 
 async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
-  return page.evaluate(
+  const payload = shots.map((shot) => ({
+    x: shot.x,
+    y: shot.y,
+    bytes: dataUrlToBytes(shot.dataUrl),
+  }));
+  const raw = await page.evaluate(
     async ({ shots, geom, settings, mime, quality }) => {
-      async function decode(dataUrl) {
-        const blob = await (await fetch(dataUrl)).blob();
-        return createImageBitmap(blob);
-      }
       const canvas = new OffscreenCanvas(
         Math.max(1, Math.round(geom.fullW * geom.dpr)),
         Math.max(1, Math.round(geom.fullH * geom.dpr)),
       );
       const ctx = canvas.getContext("2d");
       for (const shot of shots) {
-        const bmp = await decode(shot.dataUrl);
+        const bmp = await createImageBitmap(new Blob([shot.bytes], { type: "image/png" }));
         ctx.drawImage(bmp, Math.round(shot.x * geom.dpr), Math.round(shot.y * geom.dpr));
       }
       let out = canvas;
@@ -142,34 +154,27 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
         out = next;
       }
       const blob = await out.convertToBlob({ type: mime, quality });
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      let binary = "";
-      const chunk = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-      }
       return {
-        base64: btoa(binary),
+        data: new Uint8Array(await blob.arrayBuffer()),
         width: out.width,
         height: out.height,
-        bytes: bytes.byteLength,
       };
     },
     {
-      shots,
+      shots: payload,
       geom: { fullW, fullH, dpr },
       settings,
       mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
     },
   );
+  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
 }
 
 async function reencodeEncoded(page, encoded, { width, height, mime, quality }) {
-  return page.evaluate(
-    async ({ encoded, width, height, mime, quality }) => {
-      const blob = await (await fetch(`data:${mime};base64,${encoded.base64}`)).blob();
-      const bmp = await createImageBitmap(blob);
+  const raw = await page.evaluate(
+    async ({ data, width, height, mime, quality }) => {
+      const bmp = await createImageBitmap(new Blob([data], { type: mime }));
       const w = width || bmp.width;
       const h = height || bmp.height;
       const canvas = new OffscreenCanvas(w, h);
@@ -177,16 +182,15 @@ async function reencodeEncoded(page, encoded, { width, height, mime, quality }) 
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(bmp, 0, 0, w, h);
       const out = await canvas.convertToBlob({ type: mime, quality });
-      const bytes = new Uint8Array(await out.arrayBuffer());
-      let binary = "";
-      const chunk = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-      }
-      return { base64: btoa(binary), width: w, height: h, bytes: bytes.byteLength };
+      return {
+        data: new Uint8Array(await out.arrayBuffer()),
+        width: w,
+        height: h,
+      };
     },
-    { encoded, width, height, mime, quality },
+    { data: encoded.data, width, height, mime, quality },
   );
+  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
 }
 
 async function applyByteBudget(page, encoded, settings) {
@@ -215,7 +219,7 @@ async function applyByteBudget(page, encoded, settings) {
       const key = `${canvas.width}x${canvas.height}:${q}:${type}`;
       if (cache.has(key)) {
         last = cache.get(key);
-        return { size: last.bytes };
+        return { size: last.data.byteLength };
       }
       const next = await reencodeEncoded(page, encoded, {
         width: canvas.width,
@@ -225,7 +229,7 @@ async function applyByteBudget(page, encoded, settings) {
       });
       cache.set(key, next);
       last = next;
-      return { size: next.bytes };
+      return { size: next.data.byteLength };
     },
   });
   return last;
@@ -319,29 +323,53 @@ async function tiledFullPage(page, settings, options) {
 }
 
 async function reencodePng(page, buf, settings) {
-  const dataUrl = bufToDataUrl(buf);
-  const encoded = await page.evaluate(
-    async ({ dataUrl, mime, quality }) => {
-      const blob = await (await fetch(dataUrl)).blob();
-      const bmp = await createImageBitmap(blob);
-      const canvas = new OffscreenCanvas(bmp.width, bmp.height);
-      canvas.getContext("2d").drawImage(bmp, 0, 0);
-      const out = await canvas.convertToBlob({ type: mime, quality });
-      const bytes = new Uint8Array(await out.arrayBuffer());
-      let binary = "";
-      const chunk = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-      }
-      return { base64: btoa(binary), width: bmp.width, height: bmp.height, bytes: bytes.byteLength };
-    },
+  const encoded = await reencodeEncoded(
+    page,
+    { data: new Uint8Array(buf) },
     {
-      dataUrl,
       mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
     },
   );
   return applyByteBudget(page, encoded, settings);
+}
+
+async function regionHashesInPage(page, data, mime) {
+  return page.evaluate(
+    async ({ data, mime, grid }) => {
+      const bmp = await createImageBitmap(new Blob([data], { type: mime }));
+      const canvas = new OffscreenCanvas(bmp.width, bmp.height);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(bmp, 0, 0);
+      const img = ctx.getImageData(0, 0, bmp.width, bmp.height);
+      const hashes = [];
+      const cellW = Math.max(1, Math.floor(bmp.width / grid));
+      const cellH = Math.max(1, Math.floor(bmp.height / grid));
+      for (let gy = 0; gy < grid; gy++) {
+        for (let gx = 0; gx < grid; gx++) {
+          const x0 = gx * cellW;
+          const y0 = gy * cellH;
+          const x1 = gx === grid - 1 ? bmp.width : x0 + cellW;
+          const y1 = gy === grid - 1 ? bmp.height : y0 + cellH;
+          let h = 2166136261;
+          for (let y = y0; y < y1; y++) {
+            for (let x = x0; x < x1; x++) {
+              const i = (y * bmp.width + x) * 4;
+              h ^= img.data[i];
+              h = Math.imul(h, 16777619);
+              h ^= img.data[i + 1];
+              h = Math.imul(h, 16777619);
+              h ^= img.data[i + 2];
+              h = Math.imul(h, 16777619);
+            }
+          }
+          hashes.push((h >>> 0).toString(16).padStart(8, "0"));
+        }
+      }
+      return hashes;
+    },
+    { data, mime, grid: REGION_GRID },
+  );
 }
 
 async function visibleCapture(page, settings) {
@@ -409,13 +437,18 @@ async function writeOutput(options, encoded, dim, settings) {
   const leaf = filename(record, settings).split("/").pop();
   const target = uniquePath(resolve(options.out || leaf), existsSync);
   mkdirSync(dirname(target), { recursive: true });
-  let body = Buffer.from(encoded.base64, "base64");
+  let body = Buffer.from(encoded.data);
   if (options.format === "pdf") {
     const pdf = jpegToPdfBlob(body, encoded.width, encoded.height, dim.title);
     body = Buffer.from(await pdf.arrayBuffer());
   }
   writeFileSync(target, body);
-  return { path: target, bytes: body.length };
+  return {
+    path: target,
+    bytes: body.length,
+    fileBody: body,
+    mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
+  };
 }
 
 export async function capture(options) {
@@ -429,6 +462,7 @@ export async function capture(options) {
     else if (options.fullPage) result = await tiledFullPage(page, settings, options);
     else result = await visibleCapture(page, settings);
     const written = await writeOutput(options, result.encoded, result.dim, settings);
+    const regions = await regionHashesInPage(page, result.encoded.data, written.mime);
     return {
       path: written.path,
       width: result.encoded.width,
@@ -437,6 +471,9 @@ export async function capture(options) {
       bytes: written.bytes,
       engine: options.fullPage ? options.engine : "viewport",
       tiles: result.tiles,
+      url: result.dim.url,
+      sha256: sha256(written.fileBody),
+      regions,
     };
   });
 }

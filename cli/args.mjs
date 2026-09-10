@@ -4,6 +4,7 @@ export const EXIT = {
   ARGS: 2,
   TARGET: 3,
   BROWSER: 4,
+  DIFF: 5,
 };
 
 const DEVICES = {
@@ -40,6 +41,7 @@ export function parseArgs(argv) {
     channel: "chrome",
     headed: false,
     overflow: true,
+    baseline: null,
     help: false,
   };
 
@@ -117,6 +119,9 @@ export function parseArgs(argv) {
       case "cdp":
         options.cdp = value;
         break;
+      case "baseline":
+        options.baseline = value;
+        break;
       case "channel":
         if (!CHANNELS.has(value)) return fail("--channel must be chrome, msedge, or chromium");
         options.channel = value;
@@ -163,12 +168,13 @@ Options:
   --max-bytes <n>             Re-encode / downscale to a byte budget.
   --out <path>                Output file. Defaults to a slug in the current directory.
   --cdp <wsUrl>               Attach to an already-running Chrome (logged-in pages).
+  --baseline <path.json>      Compare this capture to a prior verdict. Exit 5 on change.
   --channel chrome|msedge|chromium   Default chrome (installed browser, not a download).
   --headed                    Show the browser.
   --overflow / --no-overflow  Scroll a main overflow pane when the page itself does not
                               (default on, same as the extension setting).
 
-Exit codes: 0 ok, 1 capture failed, 2 bad arguments, 3 selector not found, 4 browser launch failed.
+Exit codes: 0 ok, 1 capture failed, 2 bad arguments, 3 selector not found, 4 browser launch failed, 5 differs from baseline.
 
 JSON goes to stdout. Progress goes to stderr.
 `;

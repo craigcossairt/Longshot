@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://bloom.date"
+    />
+    <title>Bloom-shaped CSP fixture</title>
+  </head>
+  <body>
+    <h1>Inline styles allowed, data: fetch forbidden</h1>
+    <p>connect-src has no data: scheme.</p>
+  </body>
+</html>
