@@ -6,7 +6,7 @@ import { after, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { EXIT } from "../../cli/args.mjs";
 import { capture } from "../../cli/playwright-adapter.mjs";
-import { chromium } from "../../cli/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const fixture = pathToFileURL(join(root, "test/fixtures/csp-bloom.html")).href;

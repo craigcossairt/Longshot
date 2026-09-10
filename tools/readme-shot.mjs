@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { chromium } from "../cli/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { capture } from "../cli/playwright-adapter.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");

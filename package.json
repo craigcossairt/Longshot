@@ -1,0 +1,45 @@
+{
+  "name": "@craigcossairt/longshot",
+  "version": "1.4.0",
+  "description": "Headless full-page screenshots with sticky-header suppression, overflow-pane capture, and baseline diff.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "longshot": "./cli/longshot.mjs"
+  },
+  "files": [
+    "cli/*.mjs",
+    "cli/README.md",
+    "extension/core",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/craigcossairt/Longshot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/craigcossairt/Longshot/issues"
+  },
+  "homepage": "https://github.com/craigcossairt/Longshot#readme",
+  "keywords": [
+    "screenshot",
+    "full-page",
+    "cli",
+    "playwright",
+    "chrome"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "longshot": "node ./cli/longshot.mjs",
+    "test": "node --test test/core/*.test.mjs test/cli/*.test.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.55.0"
+  }
+}

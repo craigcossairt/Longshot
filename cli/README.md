@@ -2,15 +2,22 @@
 
 Headless captures that reuse the extension's tiling, sticky-header suppression, and byte-budget logic.
 
-Clone this repo, then:
+Package: `@craigcossairt/longshot`. Published from the repo root so the CLI and
+`extension/core/` ship in one tarball.
 
 ```
-cd cli
+npm install -g @craigcossairt/longshot
+longshot --url https://example.com --full-page --out capture.png
+```
+
+From a clone:
+
+```
 npm install
-node longshot.mjs --url https://example.com --full-page --out capture.png
+npx longshot --url https://example.com --full-page --out capture.png
 ```
 
-Playwright is a devDependency. The default `--channel chrome` uses the Chrome already on the machine. It does not download a browser. Use `--channel chromium` only if you have installed Playwright's Chromium.
+Playwright is a runtime dependency. The default `--channel chrome` uses the Chrome already on the machine. It does not download a browser. Use `--channel chromium` only if you have installed Playwright's Chromium.
 
 Progress goes to stderr. One JSON object goes to stdout. Exit 5 means the capture
 succeeded and `--baseline` reported a change.

@@ -4,10 +4,12 @@ The unpacked Chrome/Brave extension is `extension/`. Load that folder in
 Developer mode. After changing files there, reload the extension.
 
 Shared capture logic lives in `extension/core/` (no `chrome.*`). The headless
-CLI in `cli/` imports that core. There is no website to run. `vercel.json` is tracked only so the leftover
+CLI in `cli/` imports that core. The npm package is `@craigcossairt/longshot`,
+published from the repo root so `cli/` and `extension/core/` ship together.
+There is no website to run. `vercel.json` is tracked only so the leftover
 Vercel project skips every deploy (`ignoreCommand: exit 0`). Do not add a
-build command; `package.json` at the repo root stays gitignored. Local
-studio leftovers (`src/`, `public/`, `scripts/`) stay on disk and ignored.
+build command. Local studio leftovers (`src/`, `public/`, `scripts/`) stay on
+disk and ignored.
 
 ## Tests
 

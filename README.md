@@ -46,12 +46,18 @@ captures the main `overflow: auto` feed instead.
 
 ## CLI (optional)
 
-For scripts and agents. Clone-and-run, not published to npm.
+Package: `@craigcossairt/longshot`. The command is `longshot`.
 
 ```
-cd cli
+npm install -g @craigcossairt/longshot
+longshot --url https://example.com --full-page --out capture.png
+```
+
+From a clone:
+
+```
 npm install
-node longshot.mjs --url https://example.com --full-page --out capture.png
+npx longshot --url https://example.com --full-page --out capture.png
 ```
 
 See [cli/README.md](cli/README.md) for engines, exit codes, and `--cdp`.
