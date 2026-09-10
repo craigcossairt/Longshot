@@ -17,6 +17,9 @@ function friendlyStatus(message) {
   if (/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i.test(message || "")) {
     return "Chrome limited screenshot speed. Wait a second and try again.";
   }
+  if (/must request permission to access this host/i.test(message || "")) {
+    return "This page cannot be scripted. Reload Longshot and try Visible viewport.";
+  }
   return message;
 }
 

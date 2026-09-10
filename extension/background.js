@@ -16,6 +16,16 @@ import {
 import { longshotGetDirHandle, longshotWriteToDir } from "./folder.js";
 import { longshotPushHistory } from "./history.js";
 
+function isBrowserUiPage(url) {
+  return /^(chrome|brave|edge|about|view-source):/i.test(url || "");
+}
+
+function canInjectIntoTab(url) {
+  if (!url || isBrowserUiPage(url)) return false;
+  if (/^(chrome-extension|moz-extension|data|blob):/i.test(url)) return false;
+  return true;
+}
+
 function createCanvas(width, height) {
   return new OffscreenCanvas(width, height);
 }
@@ -257,13 +267,29 @@ async function captureRegion(tab, settings) {
   await finishCapture(canvas, rect, settings);
 }
 
+async function captureVisibleOnly(tab, settings) {
+  report("Capturing", { index: 1, total: 1, phase: "capture" });
+  const dataUrl = await captureVisibleTabPaced(tab.windowId);
+  const bmp = await decode(dataUrl);
+  const canvas = createCanvas(bmp.width, bmp.height);
+  canvas.getContext("2d").drawImage(bmp, 0, 0);
+  await finishCapture(canvas, { title: tab.title || "Page", url: tab.url || "" }, settings);
+}
+
 async function captureActive(mode) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("No active tab");
-  if (tab.url?.startsWith("chrome://") || tab.url?.startsWith("brave://") || tab.url?.startsWith("edge://")) {
+  if (isBrowserUiPage(tab.url)) {
     throw new Error("This page cannot be captured");
   }
   const settings = await getSettings();
+  if (!canInjectIntoTab(tab.url)) {
+    if (mode === "region") {
+      throw new Error("Area select is not available on this page. Use visible or full page.");
+    }
+    await captureVisibleOnly(tab, settings);
+    return;
+  }
   if (mode === "region") {
     await captureRegion(tab, settings);
     return;
