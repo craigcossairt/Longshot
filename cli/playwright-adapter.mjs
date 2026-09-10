@@ -162,36 +162,17 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
   );
 }
 
-async function applyByteBudget(page, encoded, settings) {
-  if (!settings.maxFileMB) return encoded;
-  const fake = {
-    width: encoded.width,
-    height: encoded.height,
-    getContext() {
-      return { imageSmoothingEnabled: true, drawImage() {} };
-    },
-  };
-  const planned = await fitFileSize(fake, settings, {
-    createCanvas: (w, h) => ({
-      width: w,
-      height: h,
-      getContext() {
-        return { imageSmoothingEnabled: true, drawImage() {} };
-      },
-    }),
-    encode: async (canvas) => ({
-      size: Math.round((encoded.bytes * canvas.width * canvas.height) / (encoded.width * encoded.height)),
-    }),
-  });
-  if (planned.width === encoded.width && planned.height === encoded.height) return encoded;
+async function reencodeEncoded(page, encoded, { width, height, mime, quality }) {
   return page.evaluate(
     async ({ encoded, width, height, mime, quality }) => {
       const blob = await (await fetch(`data:${mime};base64,${encoded.base64}`)).blob();
       const bmp = await createImageBitmap(blob);
-      const canvas = new OffscreenCanvas(width, height);
+      const w = width || bmp.width;
+      const h = height || bmp.height;
+      const canvas = new OffscreenCanvas(w, h);
       const ctx = canvas.getContext("2d");
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(bmp, 0, 0, width, height);
+      ctx.drawImage(bmp, 0, 0, w, h);
       const out = await canvas.convertToBlob({ type: mime, quality });
       const bytes = new Uint8Array(await out.arrayBuffer());
       let binary = "";
@@ -199,16 +180,52 @@ async function applyByteBudget(page, encoded, settings) {
       for (let i = 0; i < bytes.length; i += chunk) {
         binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
       }
-      return { base64: btoa(binary), width, height, bytes: bytes.byteLength };
+      return { base64: btoa(binary), width: w, height: h, bytes: bytes.byteLength };
     },
-    {
-      encoded,
-      width: planned.width,
-      height: planned.height,
-      mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
-      quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
-    },
+    { encoded, width, height, mime, quality },
   );
+}
+
+async function applyByteBudget(page, encoded, settings) {
+  if (!settings.maxFileMB) return encoded;
+  const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
+  const useQ = usesQuality(settings.format === "pdf" ? "jpeg" : settings.format);
+  const cache = new Map();
+  let last = encoded;
+  const fake = {
+    width: encoded.width,
+    height: encoded.height,
+    getContext() {
+      return { imageSmoothingEnabled: true, drawImage() {} };
+    },
+  };
+  await fitFileSize(fake, settings, {
+    createCanvas: (w, h) => ({
+      width: w,
+      height: h,
+      getContext() {
+        return { imageSmoothingEnabled: true, drawImage() {} };
+      },
+    }),
+    encode: async (canvas, { type, quality }) => {
+      const q = useQ ? quality : 1;
+      const key = `${canvas.width}x${canvas.height}:${q}:${type}`;
+      if (cache.has(key)) {
+        last = cache.get(key);
+        return { size: last.bytes };
+      }
+      const next = await reencodeEncoded(page, encoded, {
+        width: canvas.width,
+        height: canvas.height,
+        mime: type,
+        quality: q,
+      });
+      cache.set(key, next);
+      last = next;
+      return { size: next.bytes };
+    },
+  });
+  return last;
 }
 
 function delay(ms) {

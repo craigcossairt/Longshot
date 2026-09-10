@@ -46,6 +46,13 @@ node longshot.mjs --url file://$PWD/../test/fixtures/overflow.html --full-page -
 
 `--cdp ws://127.0.0.1:9222` attaches to a Chrome started with `--remote-debugging-port=9222`. There is no native-messaging host in this release.
 
+## URLs
+
+`--url` accepts `http:`, `https:`, and `file:`. Local files are supported on
+purpose so maintainers and agents can capture fixtures without a network
+(`file:///…/test/fixtures/sticky.html`). The CLI does not upload captures and
+does not restrict URLs to loopback.
+
 ## Privacy
 
 The CLI is offline except for the `--url` you pass and an optional CDP connection. Captures are not uploaded.

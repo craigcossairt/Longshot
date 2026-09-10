@@ -34,10 +34,10 @@ try {
   });
 } catch (error) {
   const message = String(error?.message || error);
-  let code = [EXIT.CAPTURE, EXIT.ARGS, EXIT.TARGET, EXIT.BROWSER].includes(error?.code)
-    ? error.code
-    : EXIT.CAPTURE;
-  if (/Cannot find package 'playwright'|browserType\.launch|connectOverCDP/i.test(message)) {
+  let code = EXIT.CAPTURE;
+  if ([EXIT.CAPTURE, EXIT.ARGS, EXIT.TARGET, EXIT.BROWSER].includes(error?.code)) {
+    code = error.code;
+  } else if (/Cannot find package ['"]playwright['"]/.test(message)) {
     code = EXIT.BROWSER;
   }
   fail(code, message);
