@@ -1,14 +1,19 @@
 # Longshot
 
-A Chrome and Brave extension for full-page screenshots. Capture, crop,
-annotate, copy, download, or save as PDF. Everything stays on your machine.
+<p>
+  <img src="extension/icons/icon128.png" alt="Longshot icon" width="72" height="72" />
+</p>
 
-This repository is the extension (v1.3.0), plus an optional headless CLI that
-reuses the same capture core. Load `extension/` unpacked; there is no website
-to run.
+Full-page screenshots for Chrome and Brave. Capture, crop, annotate, copy,
+download, or save as PDF. Sticky headers are suppressed after the first tile.
+Overflow panes (Gmail-style inner scrollers) are captured when the page itself
+does not scroll. Nothing is uploaded.
+
+This repository is the extension plus an optional headless CLI that reuses the
+same capture core. Load `extension/` unpacked; there is no website to run.
 
 <p>
-  <img src="extension/icons/icon128.png" alt="Longshot icon" width="96" height="96" />
+  <img src="docs/editor.png" alt="Longshot editor with a captured page, ellipse, arrow, text, and pin stamp" width="1100" />
 </p>
 
 ## What it does

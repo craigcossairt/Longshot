@@ -14,6 +14,8 @@ node --test test/core/*.test.mjs test/cli/*.test.mjs
 node tools/check-manifest.mjs
 ```
 
+README editor screenshot: `node tools/readme-shot.mjs` writes `docs/editor.png`.
+
 ## Pull requests
 
 Keep changes scoped. Match the existing dark UI (cream primary, no extra
