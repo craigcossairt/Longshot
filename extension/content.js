@@ -258,7 +258,8 @@
       return;
     }
     if (msg.type === "LONGSHOT_HIDE_CHROME") {
-      hideFloating(document);
+      if (globalThis.__longshotHide) globalThis.__longshotHide.hide();
+      else hideFloating(document);
       sendResponse({ ok: true });
       return;
     }
@@ -268,6 +269,7 @@
     }
     if (msg.type === "LONGSHOT_RESET") {
       scrollInstant(msg.x, msg.y);
+      if (globalThis.__longshotHide) globalThis.__longshotHide.reset();
       while (restores.length) restores.pop()();
       sendResponse({ ok: true });
     }

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Longshot sticky fixture</title>
+    <style>
+      body {
+        margin: 0;
+        font: 16px/1.4 sans-serif;
+        background: #f4f1ea;
+        color: #1b1a17;
+      }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        height: 64px;
+        background: #c0392b;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        padding: 0 20px;
+      }
+      section {
+        height: 900px;
+        padding: 24px 20px;
+        border-bottom: 8px solid #1b1a17;
+      }
+      section:nth-child(odd) {
+        background: #efe7d3;
+      }
+    </style>
+  </head>
+  <body>
+    <header id="sticky-header">Sticky header — should appear once</header>
+    <section>Block 1</section>
+    <section>Block 2</section>
+    <section>Block 3</section>
+    <section>Block 4</section>
+  </body>
+</html>

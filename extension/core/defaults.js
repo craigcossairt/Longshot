@@ -1,5 +1,4 @@
-/* Keep in sync with extension/core/defaults.js — options page is a classic script. */
-const LONGSHOT_DEFAULTS = {
+export const DEFAULTS = {
   format: "png",
   quality: 0.92,
   captureIframes: true,

@@ -17,6 +17,14 @@
     "service_worker": "background.js"
   },
   "options_page": "options.html",
+  "commands": {
+    "capture-full-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+L"
+      },
+      "description": "Capture full page"
+    }
+  },
   "permissions": ["activeTab", "scripting", "storage", "downloads", "tabs", "offscreen", "clipboardWrite"],
   "host_permissions": ["<all_urls>"],
   "icons": {

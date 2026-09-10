@@ -24,8 +24,9 @@ api/
 scripts/
 public/
 migrations/
-package.json
-package-lock.json
+# Root App Builder leftover. CLI tooling is cli/package.json (tracked).
+/package.json
+/package-lock.json
 vite.config.ts
 tsconfig.json
 nitro.config.ts

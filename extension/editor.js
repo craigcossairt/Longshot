@@ -795,6 +795,7 @@ document.getElementById("download").addEventListener("click", async () => {
   chrome.runtime.sendMessage({ type: "LONGSHOT_EXPORT", kind: "image", dataUrl, format });
 });
 document.getElementById("pdf").addEventListener("click", async () => {
+  const { jpegToPdfBlob } = await import("./core/pdf.js");
   const blob = await toBlob("image/jpeg", 0.92);
   const buf = await blob.arrayBuffer();
   const pdf = jpegToPdfBlob(new Uint8Array(buf), canvas.width, canvas.height, record?.title || "Capture");

@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax check
+        run: |
+          find extension cli test tools \( -name '*.js' -o -name '*.mjs' \) | while read -r f; do
+            node --check "$f"
+          done
+      - name: Tests
+        run: node --test test/core/*.test.mjs test/cli/*.test.mjs
+      - name: Manifest and package
+        run: node tools/pack-extension.mjs artifacts/longshot-extension.zip

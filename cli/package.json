@@ -1,0 +1,14 @@
+{
+  "name": "longshot-cli",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "longshot": "./longshot.mjs"
+  },
+  "scripts": {
+    "longshot": "node ./longshot.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}
