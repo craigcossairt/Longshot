@@ -28,8 +28,8 @@ node longshot.mjs --url https://example.com --full-page --out capture.png | jq -
 
 ## Engines
 
-- `tiled` (default) — same algorithm as the extension: scroll, hide sticky/fixed chrome from tile 2 on, stitch overlapping tiles. Slower. Applies `hideFloating()` (fixed, sticky, high-z top bars, same-origin iframes).
-- `native` — Playwright `fullPage` screenshot. Faster. Fewer scroll-triggered layout shifts. Playwright's compositor often already paints a sticky header once; it does **not** run `hideFloating()`, so `position: fixed` overlays and high-z top bars can still repeat or linger.
+- `tiled` (default): same algorithm as the extension: scroll, hide sticky/fixed chrome from tile 2 on, stitch overlapping tiles. Slower. Applies `hideFloating()` (fixed, sticky, high-z top bars, same-origin iframes).
+- `native`: Playwright `fullPage` screenshot. Faster. Fewer scroll-triggered layout shifts. Playwright's compositor often already paints a sticky header once; it does **not** run `hideFloating()`, so `position: fixed` overlays and high-z top bars can still repeat or linger.
 
 Do not expect a CLI PNG to hash-equal an extension capture of the same page. The cameras differ (`captureVisibleTab` vs `page.screenshot`). Same tiling math, same hide-from-tile-2 policy.
 

@@ -1,19 +1,25 @@
 # Longshot
 
 <p>
-  <img src="extension/icons/icon128.png" alt="Longshot icon" width="72" height="72" />
+  <img src="https://raw.githubusercontent.com/craigcossairt/Longshot/main/extension/icons/icon128.png" alt="Longshot icon" width="72" height="72" />
 </p>
 
-Full-page screenshots for Chrome and Brave. Capture, crop, annotate, copy,
-download, or save as PDF. Sticky headers are suppressed after the first tile.
-Overflow panes (Gmail-style inner scrollers) are captured when the page itself
-does not scroll. Nothing is uploaded.
+Full-page screenshots that come out right. Sticky headers are suppressed after
+the first tile instead of repeating down the image, and overflow panes
+(Gmail-style inner scrollers) are captured when the page itself does not
+scroll. Nothing is uploaded.
 
-This repository is the extension plus an optional headless CLI that reuses the
-same capture core. Load `extension/` unpacked; there is no website to run.
+Two ways to run it, one capture engine behind both:
+
+- **Browser extension** for Chrome and Brave, driven by hand. Capture, crop,
+  annotate, copy, download, or save as PDF. See [Install](#install-unpacked).
+- **Headless CLI** (`@craigcossairt/longshot`) for scripts, CI, and coding
+  agents. See [CLI](#cli-optional).
+
+There is no website to run.
 
 <p>
-  <img src="docs/Longshot Editor Example.png" alt="Longshot editor example" width="1100" />
+  <img src="https://raw.githubusercontent.com/craigcossairt/Longshot/main/docs/Longshot%20Editor%20Example.png" alt="Longshot editor example" width="1100" />
 </p>
 
 ## What it does
