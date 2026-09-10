@@ -13,7 +13,7 @@ This repository is the extension plus an optional headless CLI that reuses the
 same capture core. Load `extension/` unpacked; there is no website to run.
 
 <p>
-  <img src="docs/editor.png" alt="Longshot editor with a captured page, ellipse, arrow, text, and pin stamp" width="1100" />
+  <img src="docs/Longshot Editor Example.png" alt="Longshot editor example" width="1100" />
 </p>
 
 ## What it does
