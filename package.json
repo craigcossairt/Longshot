@@ -5,9 +5,10 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "longshot": "./cli/longshot.mjs"
+    "longshot": "longshot.js"
   },
   "files": [
+    "longshot.js",
     "cli/*.mjs",
     "cli/README.md",
     "extension/core",
