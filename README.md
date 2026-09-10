@@ -3,7 +3,7 @@
 A Chrome and Brave extension for full-page screenshots. Capture, crop,
 annotate, copy, download, or save as PDF. Everything stays on your machine.
 
-This repository is the extension (v1.2.0), plus an optional headless CLI that
+This repository is the extension (v1.3.0), plus an optional headless CLI that
 reuses the same capture core. Load `extension/` unpacked; there is no website
 to run.
 
@@ -15,6 +15,7 @@ to run.
 
 - Full page, visible viewport, or drag to select an area
 - Sticky headers hidden after the first tile so they are not repeated
+- Overflow panes (Gmail-style inner scrollers) captured when the page itself does not scroll
 - Editor: crop, pen, shapes, text, stamps, undo/redo
 - Export PNG, JPEG, WebP, AVIF, or PDF
 - Files page for recent captures
@@ -33,8 +34,10 @@ Sideload is the supported install. A Chrome Web Store listing is not published.
 4. Load unpacked and choose the `extension/` folder.
 
 Right-click the toolbar icon → **Options** for format, folder, one-click
-capture, and skip-the-editor. If one-click is on, the icon starts a capture
-instead of opening the menu.
+capture, skip-the-editor, inner frames, and overflow panes. If one-click is
+on, the icon starts a capture instead of opening the menu. **Scroll overflow
+panes** is on by default: when the page itself does not scroll, Longshot
+captures the main `overflow: auto` feed instead.
 
 ## CLI (optional)
 

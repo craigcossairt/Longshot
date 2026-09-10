@@ -8,3 +8,10 @@ export { jpegToPdfBlob } from "./pdf.js";
 export { mimeFor, usesQuality } from "./formats.js";
 export { DEFAULTS } from "./defaults.js";
 export { CAPTURE_DELAYS, runTiledCapture } from "./capture.js";
+export {
+  OVERFLOW_POLICY,
+  bindOverflowCapture,
+  overflowScore,
+  pageScrollScore,
+  pickOverflowScroller,
+} from "./overflow.js";

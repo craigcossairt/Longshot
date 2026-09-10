@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Longshot overflow fixture</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        font: 16px/1.4 sans-serif;
+        background: #1b1a17;
+        color: #f4f1ea;
+      }
+      #shell {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+      #chrome {
+        height: 48px;
+        flex: none;
+        background: #2a2924;
+        display: flex;
+        align-items: center;
+        padding: 0 16px;
+      }
+      #feed {
+        flex: 1;
+        overflow: auto;
+        background: #f4f1ea;
+        color: #1b1a17;
+      }
+      #feed header {
+        position: sticky;
+        top: 0;
+        height: 48px;
+        background: #c0392b;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        padding: 0 16px;
+      }
+      .block {
+        height: 900px;
+        padding: 20px;
+        border-bottom: 8px solid #1b1a17;
+      }
+      .block:nth-child(odd) {
+        background: #efe7d3;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="shell">
+      <div id="chrome">App chrome — not part of the feed</div>
+      <div id="feed">
+        <header>Feed sticky — should appear once</header>
+        <div class="block">Block 1</div>
+        <div class="block">Block 2</div>
+        <div class="block">Block 3</div>
+        <div class="block">Block 4</div>
+      </div>
+    </div>
+  </body>
+</html>

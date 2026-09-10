@@ -5,6 +5,7 @@ const keys = [
   "format",
   "quality",
   "captureIframes",
+  "captureOverflow",
   "includeBrowserBar",
   "includeUrlBar",
   "autoDownload",

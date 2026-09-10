@@ -37,6 +37,13 @@ describe("parseArgs", () => {
     assert.equal(parsed.options.format, "jpeg");
     assert.equal(parsed.options.maxBytes, 500000);
     assert.equal(parsed.options.viewport.width, 390);
+    assert.equal(parsed.options.overflow, true);
+  });
+
+  it("parses --no-overflow", () => {
+    const parsed = parseArgs(["--url", "https://example.com", "--full-page", "--no-overflow"]);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.options.overflow, false);
   });
 
   it("parses --region x,y,w,h", () => {

@@ -5,6 +5,8 @@ import {
   CAPTURE_DELAYS,
   DEFAULTS,
   HIDE_POLICY,
+  OVERFLOW_POLICY,
+  bindOverflowCapture,
   filename,
   fitFileSize,
   installHideSession,
@@ -80,6 +82,7 @@ async function preparePage(browser, options) {
   }
   await page.addStyleTag({ content: CAPTURE_CSS });
   await page.evaluate(installHideSession, HIDE_POLICY);
+  await page.evaluate(bindOverflowCapture, OVERFLOW_POLICY);
   return { context, page };
 }
 
@@ -212,16 +215,39 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function tiledFullPage(page, settings) {
+async function tiledFullPage(page, settings, options) {
   const dim = await measure(page);
-  progress(`Page ${dim.scrollWidth}×${dim.scrollHeight} @ ${dim.devicePixelRatio}x`);
+  const overflow =
+    options.overflow !== false ? await page.evaluate(() => globalThis.__longshotOverflow?.find() || null) : null;
+  const captureDim = overflow
+    ? {
+        ...dim,
+        scrollX: overflow.scrollLeft,
+        scrollY: overflow.scrollTop,
+        scrollWidth: overflow.scrollWidth,
+        scrollHeight: overflow.scrollHeight,
+        viewportWidth: overflow.clientWidth,
+        viewportHeight: overflow.clientHeight,
+      }
+    : dim;
+  let lastCrop = overflow?.crop || null;
+  if (overflow) {
+    progress(`Overflow pane ${overflow.scrollWidth}×${overflow.scrollHeight}`);
+  } else {
+    progress(`Page ${dim.scrollWidth}×${dim.scrollHeight} @ ${dim.devicePixelRatio}x`);
+  }
   const result = await runTiledCapture({
     mode: "full",
-    dim,
+    dim: captureDim,
     delays: CAPTURE_DELAYS,
     delay,
-    scroll: async (x, y) =>
-      page.evaluate(async ({ x, y }) => {
+    scroll: async (x, y) => {
+      if (overflow) {
+        const pos = await page.evaluate(async ({ x, y }) => globalThis.__longshotOverflow.scroll(x, y), { x, y });
+        if (pos?.crop) lastCrop = pos.crop;
+        return pos;
+      }
+      return page.evaluate(async ({ x, y }) => {
         const root = document.scrollingElement || document.documentElement;
         const maxX = Math.max(0, root.scrollWidth - window.innerWidth);
         const maxY = Math.max(0, root.scrollHeight - window.innerHeight);
@@ -234,28 +260,42 @@ async function tiledFullPage(page, settings) {
         }
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         return { x: window.scrollX, y: window.scrollY };
-      }, { x, y }),
+      }, { x, y });
+    },
     hideChrome: async () => {
       await page.evaluate(() => globalThis.__longshotHide?.hide());
     },
     reset: async (orig) => {
-      await page.evaluate(({ x, y }) => {
-        try {
-          window.scrollTo({ left: x, top: y, behavior: "instant" });
-        } catch {
-          window.scrollTo(x, y);
+      await page.evaluate(({ x, y, usedOverflow }) => {
+        if (usedOverflow) globalThis.__longshotOverflow?.reset();
+        else {
+          try {
+            window.scrollTo({ left: x, top: y, behavior: "instant" });
+          } catch {
+            window.scrollTo(x, y);
+          }
         }
         globalThis.__longshotHide?.reset();
-      }, orig);
+      }, { x: orig.x, y: orig.y, usedOverflow: Boolean(overflow) });
     },
-    captureTile: async () => captureViewportPng(page),
+    captureTile: async () => {
+      if (lastCrop?.w && lastCrop?.h) {
+        const buf = await page.screenshot({
+          type: "png",
+          animations: "disabled",
+          clip: { x: lastCrop.x, y: lastCrop.y, width: lastCrop.w, height: lastCrop.h },
+        });
+        return bufToDataUrl(buf);
+      }
+      return captureViewportPng(page);
+    },
     onProgress: ({ text }) => progress(text),
   });
   progress("Stitching");
   const dpr = dim.devicePixelRatio || 1;
   let encoded = await encodeInPage(page, result.shots, { fullW: result.fullW, fullH: result.fullH, dpr }, settings);
   encoded = await applyByteBudget(page, encoded, settings);
-  return { encoded, dim, tiles: result.tiles };
+  return { encoded, dim: captureDim, tiles: result.tiles };
 }
 
 async function reencodePng(page, buf, settings) {
@@ -366,7 +406,7 @@ export async function capture(options) {
     if (options.selector) result = await selectorCapture(page, options, settings);
     else if (options.region) result = await regionCapture(page, options, settings);
     else if (options.fullPage && options.engine === "native") result = await nativeFullPage(page, settings);
-    else if (options.fullPage) result = await tiledFullPage(page, settings);
+    else if (options.fullPage) result = await tiledFullPage(page, settings, options);
     else result = await visibleCapture(page, settings);
     const written = await writeOutput(options, result.encoded, result.dim, settings);
     return {

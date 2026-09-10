@@ -3,6 +3,7 @@ const LONGSHOT_DEFAULTS = {
   format: "png",
   quality: 0.92,
   captureIframes: true,
+  captureOverflow: true,
   includeBrowserBar: false,
   includeUrlBar: false,
   autoDownload: false,

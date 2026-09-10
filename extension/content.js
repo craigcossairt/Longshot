@@ -254,7 +254,12 @@
     if (msg.type === "LONGSHOT_MEASURE") {
       injectCaptureCss();
       if (msg.expandFrames) expandFrames();
-      sendResponse(measure());
+      const dim = measure();
+      if (msg.findOverflow && globalThis.__longshotOverflow) {
+        const overflow = globalThis.__longshotOverflow.find();
+        if (overflow) dim.overflow = overflow;
+      }
+      sendResponse(dim);
       return;
     }
     if (msg.type === "LONGSHOT_HIDE_CHROME") {
@@ -264,11 +269,16 @@
       return;
     }
     if (msg.type === "LONGSHOT_SCROLL") {
+      if (globalThis.__longshotOverflow?.active()) {
+        globalThis.__longshotOverflow.scroll(msg.x, msg.y).then(sendResponse);
+        return true;
+      }
       scrollToPos(msg.x, msg.y).then(sendResponse);
       return true;
     }
     if (msg.type === "LONGSHOT_RESET") {
-      scrollInstant(msg.x, msg.y);
+      if (globalThis.__longshotOverflow?.active()) globalThis.__longshotOverflow.reset();
+      else scrollInstant(msg.x, msg.y);
       if (globalThis.__longshotHide) globalThis.__longshotHide.reset();
       while (restores.length) restores.pop()();
       sendResponse({ ok: true });

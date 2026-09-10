@@ -1,6 +1,8 @@
 import {
   DEFAULTS,
   HIDE_POLICY,
+  OVERFLOW_POLICY,
+  bindOverflowCapture,
   cropVisible,
   filename,
   fitFileSize,
@@ -144,6 +146,11 @@ async function ensureContent(tabId) {
     func: installHideSession,
     args: [HIDE_POLICY],
   });
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: bindOverflowCapture,
+    args: [OVERFLOW_POLICY],
+  });
 }
 
 function delay(ms) {
@@ -265,21 +272,44 @@ async function captureActive(mode) {
   const dim = await chrome.tabs.sendMessage(tab.id, {
     type: "LONGSHOT_MEASURE",
     expandFrames: settings.captureIframes,
+    findOverflow: Boolean(settings.captureOverflow && mode === "full"),
   });
+  const overflow = mode === "full" && dim?.overflow;
+  const captureDim = overflow
+    ? {
+        ...dim,
+        scrollX: dim.overflow.scrollLeft,
+        scrollY: dim.overflow.scrollTop,
+        scrollWidth: dim.overflow.scrollWidth,
+        scrollHeight: dim.overflow.scrollHeight,
+        viewportWidth: dim.overflow.clientWidth,
+        viewportHeight: dim.overflow.clientHeight,
+      }
+    : dim;
+  let lastCrop = overflow?.crop || null;
+  const dpr = dim.devicePixelRatio || 1;
   const result = await runTiledCapture({
     mode,
-    dim,
-    scroll: (x, y) => chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SCROLL", x, y }),
+    dim: captureDim,
+    scroll: async (x, y) => {
+      const pos = await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SCROLL", x, y });
+      if (pos?.crop) lastCrop = pos.crop;
+      return pos;
+    },
     hideChrome: () => chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_HIDE_CHROME" }),
     reset: (orig) => chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y }),
-    captureTile: () => captureVisibleTabPaced(tab.windowId),
+    captureTile: async () => {
+      const dataUrl = await captureVisibleTabPaced(tab.windowId);
+      if (!lastCrop?.w || !lastCrop?.h) return dataUrl;
+      const canvas = await cropVisible(dataUrl, lastCrop, dpr, { decode, createCanvas });
+      return blobToDataUrl(await canvas.convertToBlob({ type: "image/png" }));
+    },
     delay,
     onProgress: ({ index, total, text, phase }) => report(text, { index, total, phase }),
   });
 
   report("Stitching", { index: result.shots.length, total: result.shots.length, phase: "stitch" });
 
-  const dpr = dim.devicePixelRatio || 1;
   let canvas = await stitch(
     result.shots,
     { fullW: result.fullW, fullH: result.fullH, dpr },

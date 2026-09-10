@@ -34,6 +34,14 @@ node longshot.mjs --url file://$PWD/../test/fixtures/sticky.html --full-page --e
 
 The tiled image should show the red header once. Native may also show it once on this simple fixture; tiled is still the extension-parity path.
 
+## Overflow panes
+
+Tiled captures (default `--overflow`) look for a main `overflow: auto` scroller when the document itself does not scroll. `--no-overflow` always scrolls the page, matching the extension toggle off.
+
+```
+node longshot.mjs --url file://$PWD/../test/fixtures/overflow.html --full-page --out artifacts/overflow-tiled.png
+```
+
 ## Logged-in pages
 
 `--cdp ws://127.0.0.1:9222` attaches to a Chrome started with `--remote-debugging-port=9222`. There is no native-messaging host in this release.

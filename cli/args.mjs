@@ -39,6 +39,7 @@ export function parseArgs(argv) {
     cdp: null,
     channel: "chrome",
     headed: false,
+    overflow: true,
     help: false,
   };
 
@@ -54,6 +55,14 @@ export function parseArgs(argv) {
     }
     if (arg === "--headed") {
       options.headed = true;
+      continue;
+    }
+    if (arg === "--overflow") {
+      options.overflow = true;
+      continue;
+    }
+    if (arg === "--no-overflow") {
+      options.overflow = false;
       continue;
     }
     if (!arg.startsWith("--")) return fail(`Unexpected argument: ${arg}`);
@@ -156,6 +165,8 @@ Options:
   --cdp <wsUrl>               Attach to an already-running Chrome (logged-in pages).
   --channel chrome|msedge|chromium   Default chrome (installed browser, not a download).
   --headed                    Show the browser.
+  --overflow / --no-overflow  Scroll a main overflow pane when the page itself does not
+                              (default on, same as the extension setting).
 
 Exit codes: 0 ok, 1 capture failed, 2 bad arguments, 3 selector not found, 4 browser launch failed.
 
