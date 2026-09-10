@@ -1,3 +1,6 @@
+import { DEFAULTS as LONGSHOT_DEFAULTS } from "./core/defaults.js";
+import { longshotClearDirHandle, longshotSetDirHandle } from "./folder.js";
+
 const keys = [
   "format",
   "quality",

@@ -26,3 +26,5 @@ async function sendLongshotFeedback(message) {
   }
   return { delivered };
 }
+
+export { sendLongshotFeedback };

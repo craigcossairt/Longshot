@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ext = join(root, "extension");
-const out = process.argv[2] || join(root, "artifacts", "longshot-extension.zip");
+const out = resolve(root, process.argv[2] || join("artifacts", "longshot-extension.zip"));
 
 const check = spawnSync(process.execPath, [join(root, "tools", "check-manifest.mjs")], { stdio: "inherit" });
 if (check.status !== 0) process.exit(check.status || 1);

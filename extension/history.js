@@ -103,3 +103,12 @@ async function longshotHistoryDelete(ids) {
 async function longshotHistoryGet(id) {
   return (await longshotHistoryGetAll()).find((item) => item.id === id) || null;
 }
+
+export {
+  longshotByteSize,
+  longshotFormatBytes,
+  longshotHistoryDelete,
+  longshotHistoryGet,
+  longshotHistoryGetAll,
+  longshotPushHistory,
+};

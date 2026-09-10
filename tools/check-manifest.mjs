@@ -34,14 +34,8 @@ for (const value of referencedStrings(manifest)) {
 }
 
 const background = readFileSync(join(ext, "background.js"), "utf8");
-for (const match of background.matchAll(/importScripts\(([^)]+)\)/g)) {
-  for (const inner of match[1].matchAll(/"([^"]+)"/g)) {
-    if (!existsSync(join(ext, inner[1]))) missing.push(inner[1]);
-  }
-}
-for (const match of background.matchAll(/import\("(\.\/[^"]+)"\)/g)) {
-  const rel = match[1].replace(/^\.\//, "");
-  if (!existsSync(join(ext, rel))) missing.push(match[1]);
+for (const match of background.matchAll(/from ["']\.\/([^"']+)["']/g)) {
+  if (!existsSync(join(ext, match[1]))) missing.push(match[1]);
 }
 if (!existsSync(join(ext, "content.js"))) missing.push("content.js");
 if (!existsSync(join(ext, "core/index.js"))) missing.push("core/index.js");

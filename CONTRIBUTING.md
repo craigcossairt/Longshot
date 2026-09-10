@@ -4,7 +4,8 @@ The unpacked Chrome/Brave extension is `extension/`. Load that folder in
 Developer mode. After changing files there, reload the extension.
 
 Shared capture logic lives in `extension/core/` (no `chrome.*`). The headless
-CLI in `cli/` imports that core. There is no website to run.
+CLI in `cli/` imports that core. There is no website to run. `vercel.json`
+skips every Vercel build on purpose while the old project is still connected.
 
 ## Tests
 

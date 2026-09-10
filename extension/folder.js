@@ -74,3 +74,5 @@ async function longshotWriteToDir(handle, filename, blob) {
   await writable.write(blob);
   await writable.close();
 }
+
+export { longshotClearDirHandle, longshotGetDirHandle, longshotSetDirHandle, longshotWriteToDir };

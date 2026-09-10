@@ -1,3 +1,10 @@
+import {
+  longshotByteSize,
+  longshotFormatBytes,
+  longshotHistoryDelete,
+  longshotHistoryGetAll,
+} from "./history.js";
+
 const rows = document.getElementById("rows");
 const empty = document.getElementById("empty");
 const count = document.getElementById("count");

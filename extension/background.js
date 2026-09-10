@@ -1,6 +1,18 @@
-importScripts("folder.js", "history.js");
-
-const coreReady = import("./core/index.js");
+import {
+  DEFAULTS,
+  HIDE_POLICY,
+  cropVisible,
+  filename,
+  fitFileSize,
+  fitLimits,
+  installHideSession,
+  mimeFor,
+  runTiledCapture,
+  stitch,
+  usesQuality,
+} from "./core/index.js";
+import { longshotGetDirHandle, longshotWriteToDir } from "./folder.js";
+import { longshotPushHistory } from "./history.js";
 
 function createCanvas(width, height) {
   return new OffscreenCanvas(width, height);
@@ -18,12 +30,6 @@ async function encode(canvas, { type, quality }) {
 
 let captureInFlight = false;
 let lastCaptureAt = 0;
-
-async function getCore() {
-  return coreReady;
-}
-
-void getCore();
 
 async function applyActionPopup() {
   const settings = await getSettings();
@@ -123,13 +129,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 async function getSettings() {
-  const core = await getCore();
-  const stored = await chrome.storage.sync.get(core.DEFAULTS);
-  return { ...core.DEFAULTS, ...stored };
+  const stored = await chrome.storage.sync.get(DEFAULTS);
+  return { ...DEFAULTS, ...stored };
 }
 
 async function ensureContent(tabId) {
-  const core = await getCore();
   try {
     await chrome.tabs.sendMessage(tabId, { type: "LONGSHOT_PING" });
   } catch {
@@ -137,8 +141,8 @@ async function ensureContent(tabId) {
   }
   await chrome.scripting.executeScript({
     target: { tabId },
-    func: core.installHideSession,
-    args: [core.HIDE_POLICY],
+    func: installHideSession,
+    args: [HIDE_POLICY],
   });
 }
 
@@ -191,16 +195,15 @@ async function captureVisibleTabPaced(windowId) {
 }
 
 async function finishCapture(canvas, dim, settings) {
-  const core = await getCore();
   const io = { decode, createCanvas, encode };
-  canvas = core.fitLimits(canvas, settings, io);
-  canvas = await core.fitFileSize(canvas, settings, io);
-  const mime = core.mimeFor(settings.format);
+  canvas = fitLimits(canvas, settings, io);
+  canvas = await fitFileSize(canvas, settings, io);
+  const mime = mimeFor(settings.format);
   let blob;
   try {
     blob = await canvas.convertToBlob({
       type: mime,
-      quality: core.usesQuality(settings.format) ? settings.quality : 1,
+      quality: usesQuality(settings.format) ? settings.quality : 1,
     });
   } catch {
     throw new Error(`This browser cannot encode ${String(settings.format).toUpperCase()}`);
@@ -220,7 +223,7 @@ async function finishCapture(canvas, dim, settings) {
   await longshotPushHistory(record);
   await chrome.storage.local.set({ longshotCurrent: record });
   if (settings.autoDownload || (settings.skipEditor && settings.skipEditorAction === "download")) {
-    await saveExport(blob, core.filename(record, settings), settings);
+    await saveExport(blob, filename(record, settings), settings);
   }
   if (settings.skipEditor) {
     if (settings.skipEditorAction !== "download") {
@@ -236,7 +239,6 @@ async function finishCapture(canvas, dim, settings) {
 }
 
 async function captureRegion(tab, settings) {
-  const core = await getCore();
   await ensureContent(tab.id);
   report("Select an area", { index: 0, total: 1, phase: "select" });
   const rect = await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SELECT_REGION" });
@@ -244,12 +246,11 @@ async function captureRegion(tab, settings) {
   report("Capturing", { index: 1, total: 1, phase: "capture" });
   await delay(60);
   const dataUrl = await captureVisibleTabPaced(tab.windowId);
-  const canvas = await core.cropVisible(dataUrl, rect, rect.devicePixelRatio || 1, { decode, createCanvas });
+  const canvas = await cropVisible(dataUrl, rect, rect.devicePixelRatio || 1, { decode, createCanvas });
   await finishCapture(canvas, rect, settings);
 }
 
 async function captureActive(mode) {
-  const core = await getCore();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("No active tab");
   if (tab.url?.startsWith("chrome://") || tab.url?.startsWith("brave://") || tab.url?.startsWith("edge://")) {
@@ -265,7 +266,7 @@ async function captureActive(mode) {
     type: "LONGSHOT_MEASURE",
     expandFrames: settings.captureIframes,
   });
-  const result = await core.runTiledCapture({
+  const result = await runTiledCapture({
     mode,
     dim,
     scroll: (x, y) => chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SCROLL", x, y }),
@@ -279,7 +280,7 @@ async function captureActive(mode) {
   report("Stitching", { index: result.shots.length, total: result.shots.length, phase: "stitch" });
 
   const dpr = dim.devicePixelRatio || 1;
-  let canvas = await core.stitch(
+  let canvas = await stitch(
     result.shots,
     { fullW: result.fullW, fullH: result.fullH, dpr },
     { decode, createCanvas },
@@ -353,7 +354,6 @@ async function saveExport(blob, path, settings) {
 }
 
 async function exportBlob(msg) {
-  const core = await getCore();
   const settings = await getSettings();
   const stored = (await chrome.storage.local.get("longshotCurrent")).longshotCurrent;
   const record = {
@@ -368,9 +368,9 @@ async function exportBlob(msg) {
   if (!msg.dataUrl && !stored) throw new Error("Nothing to export");
   const blob = await (await fetch(msg.dataUrl || stored.dataUrl)).blob();
   if (msg.kind === "pdf") {
-    await saveExport(blob, core.filename(record, settings).replace(/\.[^.]+$/, ".pdf"), settings);
+    await saveExport(blob, filename(record, settings).replace(/\.[^.]+$/, ".pdf"), settings);
     return;
   }
-  const path = core.filename({ ...record, format: msg.format || record.format }, settings);
+  const path = filename({ ...record, format: msg.format || record.format }, settings);
   await saveExport(blob, path, settings);
 }
