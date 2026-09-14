@@ -2,11 +2,24 @@ import { jpegToPdfBlob } from "./core/pdf.js";
 import { sendLongshotFeedback } from "./feedback.js";
 import { installHostCapture } from "./host-capture.js";
 import { longshotByteSize, longshotHistoryGet, longshotPushHistory } from "./history.js";
+import {
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STEP,
+  clampZoom,
+  fitWidthZoom,
+  scrollAfterZoom,
+  stepZoom,
+  zoomPercent,
+} from "./view-zoom.js";
 
 installHostCapture();
 
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const stage = document.getElementById("stage");
+const canvasWrap = document.getElementById("canvasWrap");
+const workspace = document.querySelector(".workspace");
 const menu = document.getElementById("menu");
 const fileInput = document.getElementById("file");
 const undoBtn = document.getElementById("undo");
@@ -16,6 +29,10 @@ const deleteBtn = document.getElementById("deleteAnn");
 const textEdit = document.getElementById("textEdit");
 const emojiPicker = document.getElementById("emojiPicker");
 const emojiGrid = document.getElementById("emojiGrid");
+const zoomOutBtn = document.getElementById("zoomOut");
+const zoomInBtn = document.getElementById("zoomIn");
+const zoomFitBtn = document.getElementById("zoomFit");
+const zoomLabelBtn = document.getElementById("zoomLabel");
 const COLORS = ["#e15a4a", "#e08a3c", "#f0c14a", "#3d9a6a", "#4a7ec4", "#f7f7f2", "#111111"];
 const EMOJI = [
   "😀", "😁", "😂", "🤣", "😊", "😍", "🤩", "😎",
@@ -40,6 +57,8 @@ let drag = null;
 let undoStack = [];
 let redoStack = [];
 let pendingImageSrc = null;
+let zoom = 1;
+let zoomMode = "fit";
 const imgCache = new Map();
 
 function uid() {
@@ -87,6 +106,7 @@ function restoreFrame(next) {
         chrome.storage.local.set({ longshotCurrent: record });
       }
       render();
+      applyZoomStyles();
     };
     img.src = next.src;
     return;
@@ -145,9 +165,9 @@ function bounds(a) {
 
 function hitAnn(a, p) {
   const b = bounds(a);
-  const pad = 8;
+  const pad = 8 / zoom;
   if (a.type === "pen") {
-    const tol = Math.max(10, a.w || 3);
+    const tol = Math.max(10 / zoom, a.w || 3);
     return a.pts.some((pt, i) => {
       if (i === 0) return false;
       const q = a.pts[i - 1];
@@ -165,13 +185,13 @@ function hitAnn(a, p) {
     const dy = r.y - q.y;
     const len = dx * dx + dy * dy || 1;
     const t = Math.max(0, Math.min(1, ((p.x - q.x) * dx + (p.y - q.y) * dy) / len));
-    return Math.hypot(p.x - (q.x + t * dx), p.y - (q.y + t * dy)) < 16;
+    return Math.hypot(p.x - (q.x + t * dx), p.y - (q.y + t * dy)) < 16 / zoom;
   }
   return p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad;
 }
 
 function handleSize() {
-  return Math.max(10, Math.min(18, canvas.width / 70));
+  return Math.max(10, Math.min(18, canvas.width / 70)) / zoom;
 }
 
 function normCrop(c) {
@@ -236,20 +256,87 @@ function closeTextEditor(save) {
   render();
 }
 
+function layoutTextEditor() {
+  if (!editingTextId) return;
+  const a = anns.find((item) => item.id === editingTextId);
+  if (!a) return;
+  const fontSize = a.fontSize || 28;
+  textEdit.style.left = `${a.x * zoom}px`;
+  textEdit.style.top = `${(a.y - fontSize) * zoom}px`;
+  textEdit.style.width = `${Math.max(120, a.w || 280) * zoom}px`;
+  textEdit.style.height = `${fontSize * 3.2 * zoom}px`;
+  textEdit.style.fontSize = `${fontSize * zoom}px`;
+}
+
 function openTextEditor(a, keepSelection) {
   editingTextId = a.id;
   if (!keepSelection) selectedId = null;
-  const fontSize = a.fontSize || 28;
   textEdit.hidden = false;
   textEdit.value = a.text || "";
-  textEdit.style.left = `${a.x}px`;
-  textEdit.style.top = `${a.y - fontSize}px`;
-  textEdit.style.width = `${Math.max(120, (a.w || 280))}px`;
-  textEdit.style.height = `${fontSize * 3.2}px`;
-  textEdit.style.fontSize = `${fontSize}px`;
   textEdit.style.color = a.color || "#f1f0ec";
+  layoutTextEditor();
   textEdit.focus();
   render();
+}
+
+function applyZoomStyles() {
+  if (!canvas.width || !canvas.height) {
+    canvas.style.width = "";
+    canvas.style.height = "";
+  } else {
+    canvas.style.width = `${canvas.width * zoom}px`;
+    canvas.style.height = `${canvas.height * zoom}px`;
+  }
+  const percent = zoomPercent(zoom);
+  zoomLabelBtn.textContent = `${percent}%`;
+  const atActual = Math.abs(zoom - 1) < 0.005;
+  zoomLabelBtn.title = atActual ? "Fit to width" : "Reset to 100% (Ctrl+0)";
+  zoomLabelBtn.setAttribute("aria-label", atActual ? "Fit to width" : `Reset zoom to 100%, currently ${percent} percent`);
+  zoomOutBtn.disabled = zoom <= ZOOM_MIN + 1e-6;
+  zoomInBtn.disabled = zoom >= ZOOM_MAX - 1e-6;
+  layoutTextEditor();
+  if (image.naturalWidth) render();
+}
+
+function stageCenter() {
+  const rect = stage.getBoundingClientRect();
+  return { x: rect.left + stage.clientWidth / 2, y: rect.top + stage.clientHeight / 2 };
+}
+
+function setZoom(next, origin, mode = "manual") {
+  const prev = zoom;
+  zoom = clampZoom(next);
+  zoomMode = mode;
+  const point = origin || stageCenter();
+  const stageRect = stage.getBoundingClientRect();
+  const canvasRect = canvas.getBoundingClientRect();
+  const imgX = prev && canvasRect.width ? (point.x - canvasRect.left) / prev : 0;
+  const imgY = prev && canvasRect.height ? (point.y - canvasRect.top) / prev : 0;
+  applyZoomStyles();
+  if (!canvas.width) return;
+  const nextScroll = scrollAfterZoom({
+    imgX,
+    imgY,
+    nextZoom: zoom,
+    wrapOffsetLeft: canvasWrap.offsetLeft,
+    wrapOffsetTop: canvasWrap.offsetTop,
+    originXInStage: point.x - stageRect.left,
+    originYInStage: point.y - stageRect.top,
+  });
+  stage.scrollLeft = nextScroll.scrollLeft;
+  stage.scrollTop = nextScroll.scrollTop;
+}
+
+function zoomToFit() {
+  zoom = fitWidthZoom(canvas.width, stage.clientWidth);
+  zoomMode = "fit";
+  applyZoomStyles();
+  stage.scrollLeft = 0;
+  stage.scrollTop = 0;
+}
+
+function zoomToActual() {
+  setZoom(1, stageCenter(), "manual");
 }
 
 function handlesFor(a) {
@@ -689,6 +776,7 @@ document.getElementById("applyCrop").addEventListener("click", function applyCro
     selectedId = null;
     document.getElementById("applyCrop").hidden = true;
     render();
+    applyZoomStyles();
   };
   cropped.src = dataUrl;
   if (record) {
@@ -753,6 +841,15 @@ window.addEventListener("keydown", (e) => {
   } else if (meta && e.key.toLowerCase() === "y") {
     e.preventDefault();
     redo();
+  } else if (meta && (e.key === "=" || e.key === "+" || e.code === "Equal" || e.code === "NumpadAdd")) {
+    e.preventDefault();
+    setZoom(stepZoom(zoom, ZOOM_STEP));
+  } else if (meta && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) {
+    e.preventDefault();
+    setZoom(stepZoom(zoom, -ZOOM_STEP));
+  } else if (meta && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) {
+    e.preventDefault();
+    zoomToActual();
   } else if (e.key === "Enter" && crop) {
     e.preventDefault();
     document.getElementById("applyCrop").click();
@@ -836,6 +933,7 @@ function loadRecord(next) {
     redoStack = [];
     document.getElementById("applyCrop").hidden = true;
     render();
+    zoomToFit();
   };
   image.src = record.dataUrl;
   chrome.storage.local.set({ longshotCurrent: record });
@@ -886,6 +984,27 @@ function blobToUrl(blob) {
   });
 }
 
+zoomOutBtn.addEventListener("click", () => setZoom(stepZoom(zoom, -ZOOM_STEP)));
+zoomInBtn.addEventListener("click", () => setZoom(stepZoom(zoom, ZOOM_STEP)));
+zoomFitBtn.addEventListener("click", () => zoomToFit());
+zoomLabelBtn.addEventListener("click", () => {
+  if (Math.abs(zoom - 1) < 0.005) zoomToFit();
+  else zoomToActual();
+});
+workspace.addEventListener(
+  "wheel",
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+    setZoom(stepZoom(zoom, delta), { x: e.clientX, y: e.clientY });
+  },
+  { passive: false },
+);
+window.addEventListener("resize", () => {
+  if (zoomMode === "fit") zoomToFit();
+});
+applyZoomStyles();
 syncEditButtons();
 
 (async () => {

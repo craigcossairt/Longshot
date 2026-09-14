@@ -27,7 +27,7 @@ There is no website to run.
 - Full page, visible viewport, or drag to select an area
 - Sticky headers hidden after the first tile so they are not repeated
 - Overflow panes (Gmail-style inner scrollers) captured when the page itself does not scroll
-- Editor: crop, pen, shapes, text, stamps, undo/redo
+- Editor: crop, pen, shapes, text, stamps, undo/redo, and zoom (fit to width, 15–200%)
 - Export PNG, JPEG, WebP, AVIF, or PDF
 - Files page for recent captures
 - Optional one-click toolbar capture

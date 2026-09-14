@@ -91,6 +91,13 @@ await page.addInitScript((next) => {
       getURL: (path) => path,
       sendMessage: () => Promise.resolve({ ok: true }),
       lastError: undefined,
+      onMessage: { addListener() {} },
+    },
+    tabs: {
+      getCurrent: (cb) => {
+        if (typeof cb === "function") cb(undefined);
+        return Promise.resolve(undefined);
+      },
     },
   };
 }, record);
