@@ -75,7 +75,7 @@ async function withBrowser(options, fn) {
   }
 }
 
-async function preparePage(browser, options) {
+async function openPage(browser, options) {
   const context = options.cdp
     ? browser.contexts()[0] || (await browser.newContext())
     : await browser.newContext({
@@ -83,10 +83,15 @@ async function preparePage(browser, options) {
         deviceScaleFactor: options.viewport.scale,
         bypassCSP: true,
       });
-  const page = options.cdp ? context.pages()[0] || (await context.newPage()) : await context.newPage();
+  // Over --cdp, open a fresh tab rather than navigating one the user already has open.
+  const page = await context.newPage();
   if (options.cdp) {
     await page.setViewportSize({ width: options.viewport.width, height: options.viewport.height });
   }
+  return page;
+}
+
+async function preparePage(page, options) {
   progress(`Opening ${options.url}`);
   await page.goto(options.url, { waitUntil: "domcontentloaded", timeout: 60000 });
   if (options.wait) {
@@ -97,7 +102,6 @@ async function preparePage(browser, options) {
   await page.addStyleTag({ content: CAPTURE_CSS });
   await page.evaluate(installHideSession, HIDE_POLICY);
   await page.evaluate(bindOverflowCapture, OVERFLOW_POLICY);
-  return { context, page };
 }
 
 async function measure(page) {
@@ -454,26 +458,35 @@ async function writeOutput(options, encoded, dim, settings) {
 export async function capture(options) {
   const settings = settingsFromOptions(options);
   return withBrowser(options, async (browser) => {
-    const { page } = await preparePage(browser, options);
-    let result;
-    if (options.selector) result = await selectorCapture(page, options, settings);
-    else if (options.region) result = await regionCapture(page, options, settings);
-    else if (options.fullPage && options.engine === "native") result = await nativeFullPage(page, settings);
-    else if (options.fullPage) result = await tiledFullPage(page, settings, options);
-    else result = await visibleCapture(page, settings);
-    const written = await writeOutput(options, result.encoded, result.dim, settings);
-    const regions = await regionHashesInPage(page, result.encoded.data, written.mime);
-    return {
-      path: written.path,
-      width: result.encoded.width,
-      height: result.encoded.height,
-      format: options.format,
-      bytes: written.bytes,
-      engine: options.fullPage ? options.engine : "viewport",
-      tiles: result.tiles,
-      url: result.dim.url,
-      sha256: sha256(written.fileBody),
-      regions,
-    };
+    const page = await openPage(browser, options);
+    try {
+      await preparePage(page, options);
+      return await captureOnPage(page, options, settings);
+    } finally {
+      if (options.cdp) await page.close().catch(() => {});
+    }
   });
+}
+
+async function captureOnPage(page, options, settings) {
+  let result;
+  if (options.selector) result = await selectorCapture(page, options, settings);
+  else if (options.region) result = await regionCapture(page, options, settings);
+  else if (options.fullPage && options.engine === "native") result = await nativeFullPage(page, settings);
+  else if (options.fullPage) result = await tiledFullPage(page, settings, options);
+  else result = await visibleCapture(page, settings);
+  const written = await writeOutput(options, result.encoded, result.dim, settings);
+  const regions = await regionHashesInPage(page, result.encoded.data, written.mime);
+  return {
+    path: written.path,
+    width: result.encoded.width,
+    height: result.encoded.height,
+    format: options.format,
+    bytes: written.bytes,
+    engine: options.fullPage ? options.engine : "viewport",
+    tiles: result.tiles,
+    url: result.dim.url,
+    sha256: sha256(written.fileBody),
+    regions,
+  };
 }

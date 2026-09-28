@@ -30,10 +30,13 @@ export async function fitFileSize(source, settings, { encode, createCanvas }) {
     }
   }
   for (let i = 0; i < 8; i++) {
-    const factor = Math.sqrt(max / encoded.size) * 0.9;
-    if (!Number.isFinite(factor) || factor >= 0.99) break;
-    const w = Math.max(256, Math.round(canvas.width * factor));
-    const h = Math.max(256, Math.round(canvas.height * factor));
+    let factor = Math.sqrt(max / encoded.size) * 0.9;
+    if (!Number.isFinite(factor)) break;
+    // One factor for both sides keeps the aspect ratio; the shorter side stops at 256px.
+    factor = Math.max(factor, 256 / Math.min(canvas.width, canvas.height));
+    if (factor >= 0.99) break;
+    const w = Math.max(1, Math.round(canvas.width * factor));
+    const h = Math.max(1, Math.round(canvas.height * factor));
     if (w === canvas.width && h === canvas.height) break;
     const next = createCanvas(w, h);
     const ctx = next.getContext("2d");
@@ -45,7 +48,7 @@ export async function fitFileSize(source, settings, { encode, createCanvas }) {
       quality: usesQuality(settings.format) ? quality : 1,
     });
     if (encoded.size <= max) return canvas;
-    if (w <= 256 || h <= 256) break;
+    if (Math.min(w, h) <= 256) break;
   }
   return canvas;
 }
