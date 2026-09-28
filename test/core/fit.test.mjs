@@ -94,6 +94,20 @@ describe("fitFileSize", () => {
     assert.equal(out.height, 256);
   });
 
+  it("keeps the aspect ratio when the short side hits the 256px floor", async () => {
+    const source = fakeCanvas(400, 4000);
+    const out = await fitFileSize(
+      source,
+      { maxFileMB: 0.000001, format: "png" },
+      {
+        encode: async (canvas) => ({ size: canvas.width * canvas.height * 1000 }),
+        createCanvas: fakeCanvas,
+      },
+    );
+    assert.equal(out.width, 256);
+    assert.equal(out.height, 2560);
+  });
+
   it("gives up when the scale factor is not finite", async () => {
     const source = fakeCanvas(800, 600);
     const out = await fitFileSize(

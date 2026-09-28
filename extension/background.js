@@ -252,6 +252,10 @@ async function finishCapture(canvas, dim, settings) {
       quality: usesQuality(settings.format) ? settings.quality : 1,
     });
   } catch {
+    blob = null;
+  }
+  // convertToBlob falls back to PNG for types it cannot encode instead of throwing.
+  if (!blob || blob.type !== mime) {
     throw new Error(`This browser cannot encode ${String(settings.format).toUpperCase()}`);
   }
   const dataUrl = await blobToDataUrl(blob);

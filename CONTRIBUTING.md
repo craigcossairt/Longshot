@@ -18,7 +18,8 @@ node --test test/core/*.test.mjs test/cli/*.test.mjs
 node tools/check-manifest.mjs
 ```
 
-README editor screenshot: `node tools/readme-shot.mjs` writes `docs/editor.png`.
+Editor screenshot: `node tools/readme-shot.mjs` writes `docs/editor.png`. The
+README shows `docs/Longshot Editor Example.png`, an annotated copy updated by hand.
 
 ## Pull requests
 

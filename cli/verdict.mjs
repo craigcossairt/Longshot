@@ -105,25 +105,3 @@ export function compareToBaselineFile(current, path) {
   }
   return compareToBaseline(current, raw);
 }
-
-export function regionHashesFromRgba(rgba, width, height, grid = REGION_GRID) {
-  const hashes = [];
-  const cellW = Math.max(1, Math.floor(width / grid));
-  const cellH = Math.max(1, Math.floor(height / grid));
-  for (let gy = 0; gy < grid; gy++) {
-    for (let gx = 0; gx < grid; gx++) {
-      const x0 = gx * cellW;
-      const y0 = gy * cellH;
-      const x1 = gx === grid - 1 ? width : x0 + cellW;
-      const y1 = gy === grid - 1 ? height : y0 + cellH;
-      const hash = createHash("sha256");
-      for (let y = y0; y < y1; y++) {
-        const start = (y * width + x0) * 4;
-        const end = (y * width + x1) * 4;
-        hash.update(rgba.subarray(start, end));
-      }
-      hashes.push(hash.digest("hex").slice(0, 16));
-    }
-  }
-  return hashes;
-}

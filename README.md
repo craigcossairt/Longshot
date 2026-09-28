@@ -28,7 +28,7 @@ There is no website to run.
 - Sticky headers hidden after the first tile so they are not repeated
 - Overflow panes (Gmail-style inner scrollers) captured when the page itself does not scroll
 - Editor: crop, pen, shapes, text, stamps, undo/redo, and zoom (fit to width, 15–200%)
-- Export PNG, JPEG, WebP, AVIF, or PDF
+- Export PNG, JPEG, WebP, or PDF (AVIF only where the browser can encode it; current Chrome cannot)
 - Files page for recent captures
 - Optional one-click toolbar capture
 - Optional skip-the-editor path that copies to the clipboard (or downloads)

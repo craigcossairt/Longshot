@@ -48,6 +48,12 @@ function asUint8(value) {
   return new Uint8Array(value);
 }
 
+// convertToBlob falls back to PNG for types it cannot encode instead of throwing.
+function encodedResult(raw, mime) {
+  if (raw.type !== mime) throw new Error(`This browser cannot encode ${mime}`);
+  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+}
+
 async function withBrowser(options, fn) {
   let browser;
   try {
@@ -75,7 +81,7 @@ async function withBrowser(options, fn) {
   }
 }
 
-async function preparePage(browser, options) {
+async function openPage(browser, options) {
   const context = options.cdp
     ? browser.contexts()[0] || (await browser.newContext())
     : await browser.newContext({
@@ -83,10 +89,15 @@ async function preparePage(browser, options) {
         deviceScaleFactor: options.viewport.scale,
         bypassCSP: true,
       });
-  const page = options.cdp ? context.pages()[0] || (await context.newPage()) : await context.newPage();
+  // Over --cdp, open a fresh tab rather than navigating one the user already has open.
+  const page = await context.newPage();
   if (options.cdp) {
     await page.setViewportSize({ width: options.viewport.width, height: options.viewport.height });
   }
+  return page;
+}
+
+async function preparePage(page, options) {
   progress(`Opening ${options.url}`);
   await page.goto(options.url, { waitUntil: "domcontentloaded", timeout: 60000 });
   if (options.wait) {
@@ -97,7 +108,6 @@ async function preparePage(browser, options) {
   await page.addStyleTag({ content: CAPTURE_CSS });
   await page.evaluate(installHideSession, HIDE_POLICY);
   await page.evaluate(bindOverflowCapture, OVERFLOW_POLICY);
-  return { context, page };
 }
 
 async function measure(page) {
@@ -129,6 +139,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
     y: shot.y,
     bytes: dataUrlToBytes(shot.dataUrl),
   }));
+  const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
   const raw = await page.evaluate(
     async ({ shots, geom, settings, mime, quality }) => {
       const canvas = new OffscreenCanvas(
@@ -156,6 +167,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
       const blob = await out.convertToBlob({ type: mime, quality });
       return {
         data: new Uint8Array(await blob.arrayBuffer()),
+        type: blob.type,
         width: out.width,
         height: out.height,
       };
@@ -164,11 +176,11 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
       shots: payload,
       geom: { fullW, fullH, dpr },
       settings,
-      mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
+      mime,
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
     },
   );
-  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+  return encodedResult(raw, mime);
 }
 
 async function reencodeEncoded(page, encoded, { width, height, mime, quality }) {
@@ -184,13 +196,14 @@ async function reencodeEncoded(page, encoded, { width, height, mime, quality }) 
       const out = await canvas.convertToBlob({ type: mime, quality });
       return {
         data: new Uint8Array(await out.arrayBuffer()),
+        type: out.type,
         width: w,
         height: h,
       };
     },
     { data: encoded.data, width, height, mime, quality },
   );
-  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+  return encodedResult(raw, mime);
 }
 
 async function applyByteBudget(page, encoded, settings) {
@@ -454,26 +467,35 @@ async function writeOutput(options, encoded, dim, settings) {
 export async function capture(options) {
   const settings = settingsFromOptions(options);
   return withBrowser(options, async (browser) => {
-    const { page } = await preparePage(browser, options);
-    let result;
-    if (options.selector) result = await selectorCapture(page, options, settings);
-    else if (options.region) result = await regionCapture(page, options, settings);
-    else if (options.fullPage && options.engine === "native") result = await nativeFullPage(page, settings);
-    else if (options.fullPage) result = await tiledFullPage(page, settings, options);
-    else result = await visibleCapture(page, settings);
-    const written = await writeOutput(options, result.encoded, result.dim, settings);
-    const regions = await regionHashesInPage(page, result.encoded.data, written.mime);
-    return {
-      path: written.path,
-      width: result.encoded.width,
-      height: result.encoded.height,
-      format: options.format,
-      bytes: written.bytes,
-      engine: options.fullPage ? options.engine : "viewport",
-      tiles: result.tiles,
-      url: result.dim.url,
-      sha256: sha256(written.fileBody),
-      regions,
-    };
+    const page = await openPage(browser, options);
+    try {
+      await preparePage(page, options);
+      return await captureOnPage(page, options, settings);
+    } finally {
+      if (options.cdp) await page.close().catch(() => {});
+    }
   });
+}
+
+async function captureOnPage(page, options, settings) {
+  let result;
+  if (options.selector) result = await selectorCapture(page, options, settings);
+  else if (options.region) result = await regionCapture(page, options, settings);
+  else if (options.fullPage && options.engine === "native") result = await nativeFullPage(page, settings);
+  else if (options.fullPage) result = await tiledFullPage(page, settings, options);
+  else result = await visibleCapture(page, settings);
+  const written = await writeOutput(options, result.encoded, result.dim, settings);
+  const regions = await regionHashesInPage(page, result.encoded.data, written.mime);
+  return {
+    path: written.path,
+    width: result.encoded.width,
+    height: result.encoded.height,
+    format: options.format,
+    bytes: written.bytes,
+    engine: options.fullPage ? options.engine : "viewport",
+    tiles: result.tiles,
+    url: result.dim.url,
+    sha256: sha256(written.fileBody),
+    regions,
+  };
 }

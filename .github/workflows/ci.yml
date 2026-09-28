@@ -14,6 +14,7 @@ jobs:
           node-version: "22"
       - name: Syntax check
         run: |
+          node --check longshot.js
           find extension cli test tools \( -name '*.js' -o -name '*.mjs' \) | while read -r f; do
             node --check "$f"
           done

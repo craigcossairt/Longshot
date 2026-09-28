@@ -90,19 +90,22 @@ function dispatch(msg, sendResponse) {
 }
 
 export function installHostCapture() {
+  // Resolve this tab's id once so messages meant for another tab can be declined
+  // synchronously; holding their channel open would hang the sender's PING.
+  let ownTabId;
+  const ownTab = chrome.tabs.getCurrent().then((tab) => {
+    ownTabId = tab?.id ?? null;
+    return ownTabId;
+  });
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.longshotTargetTabId == null) return;
-    const run = (tab) => {
-      if (!tab || tab.id !== msg.longshotTargetTabId) return;
-      const asyncWait = dispatch(msg, sendResponse);
-      if (asyncWait !== true) return;
-    };
-    const current = chrome.tabs.getCurrent();
-    if (current && typeof current.then === "function") {
-      current.then(run);
-      return true;
+    if (ownTabId !== undefined) {
+      if (ownTabId !== msg.longshotTargetTabId) return false;
+      return dispatch(msg, sendResponse) === true;
     }
-    chrome.tabs.getCurrent(run);
+    ownTab.then((id) => {
+      if (id === msg.longshotTargetTabId) dispatch(msg, sendResponse);
+    });
     return true;
   });
 }
