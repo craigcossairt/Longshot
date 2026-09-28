@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { chromium } from "playwright";
 import { REGION_GRID, sha256 } from "./verdict.mjs";
 import {
+  CANVAS_MAX_SIDE,
   CAPTURE_DELAYS,
   DEFAULTS,
   HIDE_POLICY,
@@ -12,6 +13,7 @@ import {
   fitFileSize,
   installHideSession,
   jpegToPdfBlob,
+  limitScale,
   mimeFor,
   runTiledCapture,
   uniquePath,
@@ -141,28 +143,29 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
   }));
   const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
   const raw = await page.evaluate(
-    async ({ shots, geom, settings, mime, quality }) => {
-      const canvas = new OffscreenCanvas(
-        Math.max(1, Math.round(geom.fullW * geom.dpr)),
-        Math.max(1, Math.round(geom.fullH * geom.dpr)),
+    async ({ shots, geom, mime, quality }) => {
+      // Same scaling as extension/core/stitch.js: never allocate the full-size canvas.
+      const k = geom.dpr * geom.scale;
+      const out = new OffscreenCanvas(
+        Math.max(1, Math.round(geom.fullW * k)),
+        Math.max(1, Math.round(geom.fullH * k)),
       );
-      const ctx = canvas.getContext("2d");
+      const ctx = out.getContext("2d");
+      if (geom.scale !== 1) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+      }
       for (const shot of shots) {
         const bmp = await createImageBitmap(new Blob([shot.bytes], { type: "image/png" }));
-        ctx.drawImage(bmp, Math.round(shot.x * geom.dpr), Math.round(shot.y * geom.dpr));
-      }
-      let out = canvas;
-      let w = out.width * (settings.scalePercent / 100);
-      let h = out.height * (settings.scalePercent / 100);
-      const scale = Math.min(1, (settings.maxWidth || w) / w, (settings.maxHeight || h) / h);
-      w = Math.max(1, Math.round(w * scale));
-      h = Math.max(1, Math.round(h * scale));
-      if (w !== out.width || h !== out.height) {
-        const next = new OffscreenCanvas(w, h);
-        const nctx = next.getContext("2d");
-        nctx.imageSmoothingEnabled = true;
-        nctx.drawImage(out, 0, 0, w, h);
-        out = next;
+        if (geom.scale === 1) {
+          ctx.drawImage(bmp, Math.round(shot.x * geom.dpr), Math.round(shot.y * geom.dpr));
+          continue;
+        }
+        const x0 = Math.round(shot.x * k);
+        const y0 = Math.round(shot.y * k);
+        const x1 = Math.round((shot.x * geom.dpr + bmp.width) * geom.scale);
+        const y1 = Math.round((shot.y * geom.dpr + bmp.height) * geom.scale);
+        ctx.drawImage(bmp, x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
       }
       const blob = await out.convertToBlob({ type: mime, quality });
       return {
@@ -174,8 +177,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
     },
     {
       shots: payload,
-      geom: { fullW, fullH, dpr },
-      settings,
+      geom: { fullW, fullH, dpr, scale: limitScale(fullW * dpr, fullH * dpr, settings) },
       mime,
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
     },
@@ -336,10 +338,17 @@ async function tiledFullPage(page, settings, options) {
 }
 
 async function reencodePng(page, buf, settings) {
+  // PNG IHDR: width and height are big-endian at bytes 16 and 20.
+  const png = Buffer.from(buf);
+  const srcW = png.readUInt32BE(16);
+  const srcH = png.readUInt32BE(20);
+  const scale = limitScale(srcW, srcH, settings);
   const encoded = await reencodeEncoded(
     page,
     { data: new Uint8Array(buf) },
     {
+      width: Math.max(1, Math.round(srcW * scale)),
+      height: Math.max(1, Math.round(srcH * scale)),
       mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
     },
@@ -394,8 +403,28 @@ async function visibleCapture(page, settings) {
 async function nativeFullPage(page, settings) {
   progress("Native full-page screenshot (sticky chrome is not suppressed)");
   const dim = await measure(page);
-  const buf = await page.screenshot({ type: "png", fullPage: true, animations: "disabled" });
-  return { encoded: await reencodePng(page, buf, settings), dim, tiles: 1 };
+  const dpr = dim.devicePixelRatio || 1;
+  // A bitmap taller than the canvas limit cannot be decoded whole in the page, so
+  // tall pages are shot in slices and stitched (scaled) like tiled captures.
+  const sliceH = Math.floor(CANVAS_MAX_SIDE / 2 / dpr);
+  if (dim.scrollHeight <= sliceH) {
+    const buf = await page.screenshot({ type: "png", fullPage: true, animations: "disabled" });
+    return { encoded: await reencodePng(page, buf, settings), dim, tiles: 1 };
+  }
+  const shots = [];
+  for (let y = 0; y < dim.scrollHeight; y += sliceH) {
+    const buf = await page.screenshot({
+      type: "png",
+      fullPage: true,
+      animations: "disabled",
+      clip: { x: 0, y, width: dim.scrollWidth, height: Math.min(sliceH, dim.scrollHeight - y) },
+    });
+    shots.push({ x: 0, y, dataUrl: bufToDataUrl(buf) });
+  }
+  progress("Stitching");
+  let encoded = await encodeInPage(page, shots, { fullW: dim.scrollWidth, fullH: dim.scrollHeight, dpr }, settings);
+  encoded = await applyByteBudget(page, encoded, settings);
+  return { encoded, dim, tiles: shots.length };
 }
 
 async function selectorCapture(page, options, settings) {

@@ -1,4 +1,5 @@
 import { jpegToPdfBlob } from "./core/pdf.js";
+import { exportCapture } from "./export.js";
 import { sendLongshotFeedback } from "./feedback.js";
 import { installHostCapture } from "./host-capture.js";
 import { longshotByteSize, longshotHistoryGet, longshotPushHistory } from "./history.js";
@@ -896,16 +897,26 @@ document.getElementById("download").addEventListener("click", async () => {
   const blob = await toBlob(mimeFor(format), 0.92);
   // toBlob falls back to PNG for types it cannot encode; name the file to match.
   if (blob.type !== mimeFor(format)) format = "png";
-  const dataUrl = await blobToUrl(blob);
-  chrome.runtime.sendMessage({ type: "LONGSHOT_EXPORT", kind: "image", dataUrl, format });
+  await runExport(blob, format, "image");
 });
 document.getElementById("pdf").addEventListener("click", async () => {
   const blob = await toBlob("image/jpeg", 0.92);
   const buf = await blob.arrayBuffer();
   const pdf = jpegToPdfBlob(new Uint8Array(buf), canvas.width, canvas.height, record?.title || "Capture");
-  const dataUrl = await blobToUrl(pdf);
-  chrome.runtime.sendMessage({ type: "LONGSHOT_EXPORT", kind: "pdf", dataUrl });
+  await runExport(pdf, "jpeg", "pdf");
 });
+
+async function runExport(blob, format, kind) {
+  try {
+    await exportCapture(
+      blob,
+      { ...(record || {}), format, width: canvas.width, height: canvas.height, createdAt: record?.createdAt || Date.now() },
+      kind,
+    );
+  } catch (error) {
+    alert(`Export failed: ${error?.message || error}`);
+  }
+}
 document.getElementById("settings").addEventListener("click", () => {
   location.href = chrome.runtime.getURL("options.html");
 });
@@ -976,14 +987,6 @@ menu.addEventListener("click", (e) => {
   if (act === "download") document.getElementById("download").click();
   if (act === "pdf") document.getElementById("pdf").click();
 });
-
-function blobToUrl(blob) {
-  return new Promise((resolve) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.readAsDataURL(blob);
-  });
-}
 
 zoomOutBtn.addEventListener("click", () => setZoom(stepZoom(zoom, -ZOOM_STEP)));
 zoomInBtn.addEventListener("click", () => setZoom(stepZoom(zoom, ZOOM_STEP)));

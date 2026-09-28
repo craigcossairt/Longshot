@@ -1,5 +1,4 @@
 import {
-  DEFAULTS,
   HIDE_POLICY,
   OVERFLOW_POLICY,
   bindOverflowCapture,
@@ -8,12 +7,13 @@ import {
   fitFileSize,
   fitLimits,
   installHideSession,
+  limitScale,
   mimeFor,
   runTiledCapture,
   stitch,
   usesQuality,
 } from "./core/index.js";
-import { longshotGetDirHandle, longshotWriteToDir } from "./folder.js";
+import { getSettings, saveExport } from "./export.js";
 import { longshotPushHistory } from "./history.js";
 
 function isBrowserUiPage(url) {
@@ -45,12 +45,14 @@ function sendToTab(tabId, msg, ownPage) {
   });
 }
 
-function stackVertical(top, bottom) {
-  const w = Math.max(top.width, bottom.width);
-  const canvas = createCanvas(w, top.height + bottom.height);
+function stackVertical(top, bottom, scale = 1) {
+  const tw = Math.max(1, Math.round(top.width * scale));
+  const th = Math.max(1, Math.round(top.height * scale));
+  const canvas = createCanvas(Math.max(tw, bottom.width), th + bottom.height);
   const ctx = canvas.getContext("2d");
-  ctx.drawImage(top, 0, 0);
-  ctx.drawImage(bottom, 0, top.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(top, 0, 0, tw, th);
+  ctx.drawImage(bottom, 0, th);
   return canvas;
 }
 
@@ -82,10 +84,10 @@ function startCapture(mode, sendResponse) {
     return Promise.resolve();
   }
   captureInFlight = true;
-  return captureActive(mode || "full")
-    .then(() => {
+  return captureActive(mode || "full", { popup: Boolean(sendResponse) })
+    .then((result) => {
       try {
-        sendResponse?.({ ok: true });
+        sendResponse?.({ ok: true, ...result });
       } catch {
         /* popup closed */
       }
@@ -128,22 +130,27 @@ chrome.commands.onCommand.addListener((command) => {
   }
 });
 
-async function copyPngToClipboard(dataUrl) {
-  if (await chrome.offscreen.hasDocument()) {
-    await chrome.offscreen.closeDocument();
-  }
-  await chrome.offscreen.createDocument({
-    url: "offscreen.html",
-    reasons: ["CLIPBOARD"],
-    justification: "Copy the capture to the clipboard",
-  });
+// Offscreen documents never have focus, so navigator.clipboard.write fails there
+// ("Document is not focused"). Write from the captured tab instead, which has focus
+// after a keyboard shortcut or one-click capture.
+async function copyPngViaTab(tabId, dataUrl) {
   try {
-    const result = await chrome.runtime.sendMessage({ type: "LONGSHOT_OFFSCREEN_COPY", dataUrl });
-    if (!result?.ok) throw new Error(result?.error || "Copy failed");
-  } finally {
-    if (await chrome.offscreen.hasDocument()) {
-      await chrome.offscreen.closeDocument();
-    }
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
+      args: [dataUrl],
+      func: async (url) => {
+        try {
+          const blob = await (await fetch(url)).blob();
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+    return injection?.result === true;
+  } catch {
+    return false;
   }
 }
 
@@ -155,24 +162,12 @@ function flashBadge(text) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.longshotTargetTabId != null) return;
-  if (msg.type === "LONGSHOT_OFFSCREEN_COPY") return;
   if (msg.type === "LONGSHOT_CAPTURE") {
     void chrome.action.setBadgeText({ text: "" });
     startCapture(msg.mode || "full", sendResponse);
     return true;
   }
-  if (msg.type === "LONGSHOT_EXPORT") {
-    exportBlob(msg)
-      .then(() => sendResponse({ ok: true }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
-    return true;
-  }
 });
-
-async function getSettings() {
-  const stored = await chrome.storage.sync.get(DEFAULTS);
-  return { ...DEFAULTS, ...stored };
-}
 
 async function ensureContent(tabId) {
   try {
@@ -240,7 +235,7 @@ async function captureVisibleTabPaced(windowId) {
   throw lastError;
 }
 
-async function finishCapture(canvas, dim, settings) {
+async function finishCapture(canvas, dim, settings, { tab, popup }) {
   const io = { decode, createCanvas, encode };
   canvas = fitLimits(canvas, settings, io);
   canvas = await fitFileSize(canvas, settings, io);
@@ -276,16 +271,20 @@ async function finishCapture(canvas, dim, settings) {
     await saveExport(blob, filename(record, settings), settings);
   }
   if (settings.skipEditor) {
-    if (settings.skipEditorAction !== "download") {
-      const png = mime === "image/png" ? blob : await canvas.convertToBlob({ type: "image/png" });
-      await copyPngToClipboard(await blobToDataUrl(png));
+    if (settings.skipEditorAction === "download") {
       flashBadge("ok");
-    } else {
-      flashBadge("ok");
+      return {};
     }
-    return;
+    const png = mime === "image/png" ? blob : await canvas.convertToBlob({ type: "image/png" });
+    if (tab && canInjectIntoTab(tab.url) && (await copyPngViaTab(tab.id, await blobToDataUrl(png)))) {
+      flashBadge("ok");
+      return {};
+    }
+    // The popup has focus while it waits, so it can copy from history instead.
+    if (popup) return { copyId: record.id };
   }
   await chrome.tabs.create({ url: chrome.runtime.getURL("editor.html") });
+  return {};
 }
 
 async function captureRegion(tab, settings) {
@@ -297,19 +296,19 @@ async function captureRegion(tab, settings) {
   await delay(60);
   const dataUrl = await captureVisibleTabPaced(tab.windowId);
   const canvas = await cropVisible(dataUrl, rect, rect.devicePixelRatio || 1, { decode, createCanvas });
-  await finishCapture(canvas, rect, settings);
+  return finishCapture(canvas, rect, settings, { tab, popup: false });
 }
 
-async function captureVisibleOnly(tab, settings) {
+async function captureVisibleOnly(tab, settings, popup) {
   report("Capturing", { index: 1, total: 1, phase: "capture" });
   const dataUrl = await captureVisibleTabPaced(tab.windowId);
   const bmp = await decode(dataUrl);
   const canvas = createCanvas(bmp.width, bmp.height);
   canvas.getContext("2d").drawImage(bmp, 0, 0);
-  await finishCapture(canvas, { title: tab.title || "Page", url: tab.url || "" }, settings);
+  return finishCapture(canvas, { title: tab.title || "Page", url: tab.url || "" }, settings, { tab, popup });
 }
 
-async function captureActive(mode) {
+async function captureActive(mode, { popup = false } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("No active tab");
   if (isBrowserUiPage(tab.url)) {
@@ -321,92 +320,106 @@ async function captureActive(mode) {
     if (mode === "region") {
       throw new Error("Area select is not available on this page. Use visible or full page.");
     }
-    await captureVisibleOnly(tab, settings);
-    return;
+    return captureVisibleOnly(tab, settings, popup);
   }
   if (mode === "region") {
     if (ownPage) throw new Error("Area select is not available on this page.");
-    await captureRegion(tab, settings);
-    return;
+    return captureRegion(tab, settings);
   }
   if (ownPage && mode === "visible") {
-    await captureVisibleOnly(tab, settings);
-    return;
+    return captureVisibleOnly(tab, settings, popup);
   }
   if (ownPage) {
     try {
       await sendToTab(tab.id, { type: "LONGSHOT_PING" }, true);
     } catch {
-      await captureVisibleOnly(tab, settings);
-      return;
+      return captureVisibleOnly(tab, settings, popup);
     }
   } else {
     await ensureContent(tab.id);
   }
-  const dim = await sendToTab(
-    tab.id,
-    {
-      type: "LONGSHOT_MEASURE",
-      expandFrames: Boolean(!ownPage && settings.captureIframes),
-      findOverflow: Boolean(settings.captureOverflow && mode === "full"),
-    },
-    ownPage,
-  );
-  const overflow = mode === "full" && dim?.overflow;
-  const captureDim = overflow
-    ? {
-        ...dim,
-        scrollX: dim.overflow.scrollLeft,
-        scrollY: dim.overflow.scrollTop,
-        scrollWidth: dim.overflow.scrollWidth,
-        scrollHeight: dim.overflow.scrollHeight,
-        viewportWidth: dim.overflow.clientWidth,
-        viewportHeight: dim.overflow.clientHeight,
-      }
-    : dim;
-  let lastCrop = overflow?.crop || null;
-  const dpr = dim.devicePixelRatio || 1;
-  const shellH = overflow?.crop?.y || 0;
+  // Measuring injects capture CSS and may resize iframes. runTiledCapture undoes that
+  // in its finally; if anything fails before it starts, undo it here.
+  let resetSent = false;
+  let dim;
+  let result;
   let shellCanvas = null;
-  if (mode === "full" && shellH > 8) {
-    const shellShot = await captureVisibleTabPaced(tab.windowId);
-    shellCanvas = await cropVisible(
-      shellShot,
-      { x: 0, y: 0, w: dim.viewportWidth, h: shellH },
-      dpr,
-      { decode, createCanvas },
+  let dpr = 1;
+  try {
+    dim = await sendToTab(
+      tab.id,
+      {
+        type: "LONGSHOT_MEASURE",
+        expandFrames: Boolean(!ownPage && settings.captureIframes),
+        findOverflow: Boolean(settings.captureOverflow && mode === "full"),
+      },
+      ownPage,
     );
+    const overflow = mode === "full" && dim?.overflow;
+    const captureDim = overflow
+      ? {
+          ...dim,
+          scrollX: dim.overflow.scrollLeft,
+          scrollY: dim.overflow.scrollTop,
+          scrollWidth: dim.overflow.scrollWidth,
+          scrollHeight: dim.overflow.scrollHeight,
+          viewportWidth: dim.overflow.clientWidth,
+          viewportHeight: dim.overflow.clientHeight,
+        }
+      : dim;
+    let lastCrop = overflow?.crop || null;
+    dpr = dim.devicePixelRatio || 1;
+    const shellH = overflow?.crop?.y || 0;
+    if (mode === "full" && shellH > 8) {
+      const shellShot = await captureVisibleTabPaced(tab.windowId);
+      shellCanvas = await cropVisible(
+        shellShot,
+        { x: 0, y: 0, w: dim.viewportWidth, h: shellH },
+        dpr,
+        { decode, createCanvas },
+      );
+    }
+    result = await runTiledCapture({
+      mode,
+      dim: captureDim,
+      scroll: async (x, y) => {
+        const pos = await sendToTab(tab.id, { type: "LONGSHOT_SCROLL", x, y }, ownPage);
+        if (pos?.crop) lastCrop = pos.crop;
+        return pos;
+      },
+      hideChrome: () => sendToTab(tab.id, { type: "LONGSHOT_HIDE_CHROME" }, ownPage),
+      reset: (orig) => {
+        resetSent = true;
+        return sendToTab(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y }, ownPage);
+      },
+      captureTile: async () => {
+        const dataUrl = await captureVisibleTabPaced(tab.windowId);
+        if (!lastCrop?.w || !lastCrop?.h) return dataUrl;
+        const canvas = await cropVisible(dataUrl, lastCrop, dpr, { decode, createCanvas });
+        return blobToDataUrl(await canvas.convertToBlob({ type: "image/png" }));
+      },
+      delay,
+      onProgress: ({ index, total, text, phase }) => report(text, { index, total, phase }),
+    });
+  } finally {
+    if (!resetSent) {
+      await sendToTab(tab.id, { type: "LONGSHOT_RESET", x: dim?.scrollX, y: dim?.scrollY }, ownPage).catch(() => {});
+    }
   }
-  const result = await runTiledCapture({
-    mode,
-    dim: captureDim,
-    scroll: async (x, y) => {
-      const pos = await sendToTab(tab.id, { type: "LONGSHOT_SCROLL", x, y }, ownPage);
-      if (pos?.crop) lastCrop = pos.crop;
-      return pos;
-    },
-    hideChrome: () => sendToTab(tab.id, { type: "LONGSHOT_HIDE_CHROME" }, ownPage),
-    reset: (orig) => sendToTab(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y }, ownPage),
-    captureTile: async () => {
-      const dataUrl = await captureVisibleTabPaced(tab.windowId);
-      if (!lastCrop?.w || !lastCrop?.h) return dataUrl;
-      const canvas = await cropVisible(dataUrl, lastCrop, dpr, { decode, createCanvas });
-      return blobToDataUrl(await canvas.convertToBlob({ type: "image/png" }));
-    },
-    delay,
-    onProgress: ({ index, total, text, phase }) => report(text, { index, total, phase }),
-  });
 
   report("Stitching", { index: result.shots.length, total: result.shots.length, phase: "stitch" });
 
+  // Scale while stitching so a tall page never needs a full-size canvas.
+  const shellPx = shellCanvas ? shellCanvas.height : 0;
+  const scale = limitScale(result.fullW * dpr, result.fullH * dpr + shellPx, settings);
   let canvas = await stitch(
     result.shots,
-    { fullW: result.fullW, fullH: result.fullH, dpr },
+    { fullW: result.fullW, fullH: result.fullH, dpr, scale },
     { decode, createCanvas },
   );
-  if (shellCanvas) canvas = stackVertical(shellCanvas, canvas);
+  if (shellCanvas) canvas = stackVertical(shellCanvas, canvas, scale);
   canvas = compositeChrome(canvas, dim, settings);
-  await finishCapture(canvas, dim, settings);
+  return finishCapture(canvas, dim, settings, { tab, popup });
 }
 
 function chromeHeight(settings) {
@@ -448,49 +461,4 @@ function blobToDataUrl(blob) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
-}
-
-async function downloadDataUrl(dataUrl, path, saveAs) {
-  await chrome.downloads.download({
-    url: dataUrl,
-    filename: path,
-    saveAs: Boolean(saveAs),
-    conflictAction: "uniquify",
-  });
-}
-
-async function saveExport(blob, path, settings) {
-  const handle = await longshotGetDirHandle();
-  if (handle) {
-    try {
-      await longshotWriteToDir(handle, path, blob);
-      return;
-    } catch {
-      /* permission expired — fall back to Downloads */
-    }
-  }
-  const dataUrl = await blobToDataUrl(blob);
-  await downloadDataUrl(dataUrl, path, settings.saveAsDialog);
-}
-
-async function exportBlob(msg) {
-  const settings = await getSettings();
-  const stored = (await chrome.storage.local.get("longshotCurrent")).longshotCurrent;
-  const record = {
-    ...(stored || {}),
-    title: msg.title || stored?.title,
-    url: msg.url || stored?.url,
-    format: msg.format || stored?.format,
-    createdAt: msg.createdAt || stored?.createdAt,
-    width: msg.width || stored?.width,
-    height: msg.height || stored?.height,
-  };
-  if (!msg.dataUrl && !stored) throw new Error("Nothing to export");
-  const blob = await (await fetch(msg.dataUrl || stored.dataUrl)).blob();
-  if (msg.kind === "pdf") {
-    await saveExport(blob, filename(record, settings).replace(/\.[^.]+$/, ".pdf"), settings);
-    return;
-  }
-  const path = filename({ ...record, format: msg.format || record.format }, settings);
-  await saveExport(blob, path, settings);
 }
