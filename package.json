@@ -1,6 +1,6 @@
 {
   "name": "@craigcossairt/longshot",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Headless full-page screenshots with sticky-header suppression, overflow-pane capture, and baseline diff.",
   "license": "MIT",
   "type": "module",
