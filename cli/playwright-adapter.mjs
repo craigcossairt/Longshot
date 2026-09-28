@@ -48,6 +48,12 @@ function asUint8(value) {
   return new Uint8Array(value);
 }
 
+// convertToBlob falls back to PNG for types it cannot encode instead of throwing.
+function encodedResult(raw, mime) {
+  if (raw.type !== mime) throw new Error(`This browser cannot encode ${mime}`);
+  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+}
+
 async function withBrowser(options, fn) {
   let browser;
   try {
@@ -133,6 +139,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
     y: shot.y,
     bytes: dataUrlToBytes(shot.dataUrl),
   }));
+  const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
   const raw = await page.evaluate(
     async ({ shots, geom, settings, mime, quality }) => {
       const canvas = new OffscreenCanvas(
@@ -160,6 +167,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
       const blob = await out.convertToBlob({ type: mime, quality });
       return {
         data: new Uint8Array(await blob.arrayBuffer()),
+        type: blob.type,
         width: out.width,
         height: out.height,
       };
@@ -168,11 +176,11 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
       shots: payload,
       geom: { fullW, fullH, dpr },
       settings,
-      mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
+      mime,
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
     },
   );
-  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+  return encodedResult(raw, mime);
 }
 
 async function reencodeEncoded(page, encoded, { width, height, mime, quality }) {
@@ -188,13 +196,14 @@ async function reencodeEncoded(page, encoded, { width, height, mime, quality }) 
       const out = await canvas.convertToBlob({ type: mime, quality });
       return {
         data: new Uint8Array(await out.arrayBuffer()),
+        type: out.type,
         width: w,
         height: h,
       };
     },
     { data: encoded.data, width, height, mime, quality },
   );
-  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+  return encodedResult(raw, mime);
 }
 
 async function applyByteBudget(page, encoded, settings) {

@@ -892,9 +892,10 @@ document.getElementById("copy").addEventListener("click", async () => {
   await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
 });
 document.getElementById("download").addEventListener("click", async () => {
-  const format = record?.format || "png";
-  const mime = mimeFor(format);
-  const blob = await toBlob(mime, 0.92);
+  let format = record?.format || "png";
+  const blob = await toBlob(mimeFor(format), 0.92);
+  // toBlob falls back to PNG for types it cannot encode; name the file to match.
+  if (blob.type !== mimeFor(format)) format = "png";
   const dataUrl = await blobToUrl(blob);
   chrome.runtime.sendMessage({ type: "LONGSHOT_EXPORT", kind: "image", dataUrl, format });
 });
