@@ -4,6 +4,7 @@ import {
   longshotHistoryDelete,
   longshotHistoryGetAll,
 } from "./history.js";
+import { exportCapture } from "./export.js";
 
 const rows = document.getElementById("rows");
 const empty = document.getElementById("empty");
@@ -113,19 +114,16 @@ selectAll.addEventListener("change", () => {
 
 downloadBtn.addEventListener("click", async () => {
   const chosen = items.filter((item) => selected.has(item.id));
+  const failed = [];
   for (const item of chosen) {
-    chrome.runtime.sendMessage({
-      type: "LONGSHOT_EXPORT",
-      kind: "image",
-      dataUrl: item.dataUrl,
-      format: item.format,
-      title: item.title,
-      url: item.url,
-      createdAt: item.createdAt,
-      width: item.width,
-      height: item.height,
-    });
+    try {
+      const blob = await (await fetch(item.dataUrl)).blob();
+      await exportCapture(blob, item, "image");
+    } catch (error) {
+      failed.push(`${item.title || "Capture"}: ${error?.message || error}`);
+    }
   }
+  if (failed.length) alert(`Could not download:\n${failed.join("\n")}`);
 });
 
 deleteBtn.addEventListener("click", async () => {

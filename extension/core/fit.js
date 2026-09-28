@@ -1,11 +1,30 @@
 import { mimeFor, usesQuality } from "./formats.js";
 
+// Chrome cannot allocate canvases past these; an oversized one draws as blank.
+export const CANVAS_MAX_SIDE = 32768;
+export const CANVAS_MAX_AREA = 16384 * 16384;
+
+// Overall scale for a width x height image: scalePercent, then the max width/height
+// settings and canvas limits, never enlarging past scalePercent.
+export function limitScale(width, height, settings) {
+  const pct = (settings.scalePercent || 100) / 100;
+  const w = Math.max(1, width * pct);
+  const h = Math.max(1, height * pct);
+  const fit = Math.min(
+    1,
+    (settings.maxWidth || w) / w,
+    (settings.maxHeight || h) / h,
+    CANVAS_MAX_SIDE / w,
+    CANVAS_MAX_SIDE / h,
+    Math.sqrt(CANVAS_MAX_AREA / (w * h)),
+  );
+  return pct * fit;
+}
+
 export function fitLimits(source, settings, { createCanvas }) {
-  let w = source.width * (settings.scalePercent / 100);
-  let h = source.height * (settings.scalePercent / 100);
-  const scale = Math.min(1, (settings.maxWidth || w) / w, (settings.maxHeight || h) / h);
-  w = Math.max(1, Math.round(w * scale));
-  h = Math.max(1, Math.round(h * scale));
+  const scale = limitScale(source.width, source.height, settings);
+  const w = Math.max(1, Math.round(source.width * scale));
+  const h = Math.max(1, Math.round(source.height * scale));
   if (w === source.width && h === source.height) return source;
   const canvas = createCanvas(w, h);
   const ctx = canvas.getContext("2d");

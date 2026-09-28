@@ -28,5 +28,7 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node --test test/cli/*.test.mjs
+      - name: Extension tests
+        run: node --test test/extension/*.test.mjs
       - name: Manifest and package
         run: node tools/pack-extension.mjs artifacts/longshot-extension.zip

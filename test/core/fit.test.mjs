@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fitFileSize, fitLimits } from "../../extension/core/fit.js";
+import { CANVAS_MAX_AREA, CANVAS_MAX_SIDE, fitFileSize, fitLimits, limitScale } from "../../extension/core/fit.js";
 
 function fakeCanvas(width, height) {
   return {
@@ -30,6 +30,31 @@ describe("fitLimits", () => {
     const out = fitLimits(source, { scalePercent: 100, maxWidth: 1000, maxHeight: 32768 }, { createCanvas: fakeCanvas });
     assert.equal(out.width, 1000);
     assert.equal(out.height, 500);
+  });
+});
+
+describe("limitScale", () => {
+  const defaults = { scalePercent: 100, maxWidth: 8192, maxHeight: 32768 };
+
+  it("is 1 when nothing needs to shrink", () => {
+    assert.equal(limitScale(1600, 20000, defaults), 1);
+  });
+
+  it("applies scalePercent and never enlarges past it", () => {
+    assert.equal(limitScale(1000, 1000, { ...defaults, scalePercent: 50 }), 0.5);
+    assert.equal(limitScale(100, 100, { ...defaults, scalePercent: 100, maxWidth: 1e6 }), 1);
+  });
+
+  it("fits the tighter of maxWidth and maxHeight", () => {
+    assert.equal(limitScale(1600, 80000, defaults), 32768 / 80000);
+    assert.equal(limitScale(16000, 100, defaults), 8192 / 16000);
+  });
+
+  it("stays inside canvas limits when the settings allow more", () => {
+    const open = { scalePercent: 100, maxWidth: 0, maxHeight: 0 };
+    const s = limitScale(20000, 20000, open);
+    assert.ok(20000 * s * 20000 * s <= CANVAS_MAX_AREA + 1);
+    assert.ok(Math.round(100000 * limitScale(10, 100000, open)) <= CANVAS_MAX_SIDE);
   });
 });
 

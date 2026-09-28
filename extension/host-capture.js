@@ -82,7 +82,7 @@ function dispatch(msg, sendResponse) {
   }
   if (msg.type === "LONGSHOT_RESET") {
     if (globalThis.__longshotOverflow?.active()) globalThis.__longshotOverflow.reset();
-    else scrollInstant(msg.x, msg.y);
+    else if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) scrollInstant(msg.x, msg.y);
     globalThis.__longshotHide?.reset();
     sendResponse({ ok: true });
   }
