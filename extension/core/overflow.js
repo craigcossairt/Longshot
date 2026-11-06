@@ -91,7 +91,9 @@ export function bindOverflowCapture(policy) {
       } catch {
         return;
       }
-      const semantic = node.matches?.('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+      // A dialog role alone also describes non-modal cookie banners. Only an
+      // explicit modal or the native top-layer modal state can override geometry.
+      const semantic = node.matches?.('[aria-modal="true"], dialog:modal');
       if (!semantic && style.position !== "fixed") return;
       if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0 || Number(style.zIndex) < 0) return;
       for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
@@ -105,7 +107,7 @@ export function bindOverflowCapture(policy) {
       if (!hit || (hit !== node && !node.contains(hit))) return;
       // Geometry alone also matches wallpapers and fixed app shells. A foreground
       // dialog or a real inner scroller is required before overriding page capture.
-      const dialog = semantic || node.querySelector?.('dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+      const dialog = semantic || node.querySelector?.('[aria-modal="true"], dialog:modal');
       if (!dialog && !findScrollerWithin(node)) return;
       best = node;
     });
@@ -164,13 +166,13 @@ export function bindOverflowCapture(policy) {
       orig = { x: el.scrollLeft, y: el.scrollTop };
       el.scrollLeft = 0;
       el.scrollTop = 0;
-      const fits = el.scrollHeight <= el.clientHeight + 8;
+      const fits = el.scrollHeight <= el.clientHeight + 8 && el.scrollWidth <= el.clientWidth + 8;
       return {
         kind: "modal",
         fits,
         scrollLeft: el.scrollLeft,
         scrollTop: el.scrollTop,
-        scrollWidth: el.clientWidth,
+        scrollWidth: Math.max(el.scrollWidth, el.clientWidth),
         scrollHeight: Math.max(el.scrollHeight, el.clientHeight),
         clientWidth: el.clientWidth,
         clientHeight: el.clientHeight,

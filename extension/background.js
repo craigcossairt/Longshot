@@ -227,7 +227,26 @@ function createCaptureGuard(tab) {
     }
   };
   const activated = (info) => { if (info.windowId === tab.windowId && info.tabId !== tab.id) cancel(); };
-  const updated = (id, change) => { if (id === tab.id && (change.status === "loading" || change.url)) cancel(); };
+  const readDocument = async () => {
+    const [frame] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] }, injectImmediately: true, func: () => null,
+    });
+    if (!frame?.documentId) throw new Error("Main document is unavailable");
+    return frame.documentId;
+  };
+  const initialDocument = canInjectIntoTab(tab.url) ? readDocument() : null;
+  initialDocument?.catch(cancel);
+  const checkDocument = async () => {
+    if (initialDocument && await readDocument() !== await initialDocument) cancel();
+  };
+  const updated = (id, change) => {
+    if (id !== tab.id) return;
+    if (change.url && change.url !== tab.url) cancel();
+    // Tab loading also fires for subframes. Compare the main document identity
+    // instead, including same-URL reloads, without requesting new permissions.
+    else if (change.status && initialDocument) void checkDocument().catch(cancel);
+    else if (change.status === "loading") cancel();
+  };
   const removed = (id) => { if (id === tab.id) cancel(); };
   chrome.tabs.onActivated.addListener(activated);
   chrome.tabs.onUpdated.addListener(updated);
@@ -238,6 +257,7 @@ function createCaptureGuard(tab) {
       if (error) throw error;
       const [current] = await Promise.race([chrome.tabs.query({ active: true, windowId: tab.windowId }), cancelled]);
       if (!current || current.id !== tab.id || current.url !== tab.url || current.pendingUrl) cancel();
+      await Promise.race([checkDocument().catch(cancel), cancelled]);
       if (error) throw error;
     },
     close() {
@@ -471,7 +491,9 @@ async function captureTab(mode, tab, popup, guard) {
 
   // Apply percentage scaling once, including shells/modal backdrops in the size budget.
   const shellPx = shellCanvas ? shellCanvas.height : 0;
-  const width = baseCanvas ? baseCanvas.width : Math.max(result.fullW * dpr, shellCanvas?.width || 0);
+  const width = baseCanvas
+    ? baseCanvas.width + Math.max(0, result.fullW * dpr - Math.round(modal.crop.w * dpr))
+    : Math.max(result.fullW * dpr, shellCanvas?.width || 0);
   const height = baseCanvas
     ? baseCanvas.height + Math.max(0, result.fullH * dpr - Math.round(modal.crop.h * dpr))
     : result.fullH * dpr + shellPx;
@@ -494,14 +516,16 @@ function compositeChrome(source, dim, settings, scale = 1) {
   if (!extra) return source;
   const canvas = new OffscreenCanvas(source.width, source.height + extra);
   const ctx = canvas.getContext("2d");
+  ctx.save();
+  ctx.scale(scale, scale);
   ctx.fillStyle = "#e8e6e1";
-  ctx.fillRect(0, 0, canvas.width, extra);
+  ctx.fillRect(0, 0, canvas.width / scale, extra / scale);
   ctx.fillStyle = "#3a3834";
   ctx.font = "500 16px sans-serif";
-  ctx.fillText((dim.url || "").slice(0, 80), 20, extra === 86 ? 68 : 24);
+  ctx.fillText((dim.url || "").slice(0, 80), 20, settings.includeBrowserBar ? 68 : 24);
   if (settings.includeBrowserBar) {
     ctx.fillStyle = "#d4d1cb";
-    ctx.fillRect(0, 0, canvas.width, 40);
+    ctx.fillRect(0, 0, canvas.width / scale, 40);
     ["#e15a4a", "#e0b84e", "#5e9a7a"].forEach((c, i) => {
       ctx.beginPath();
       ctx.fillStyle = c;
@@ -511,6 +535,7 @@ function compositeChrome(source, dim, settings, scale = 1) {
     ctx.fillStyle = "#3a3834";
     ctx.fillText((dim.title || "Page").slice(0, 40), 92, 26);
   }
+  ctx.restore();
   ctx.drawImage(source, 0, extra);
   return canvas;
 }

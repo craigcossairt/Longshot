@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Non-modal cookie dialog over a long page</title>
+<style>
+  html, body { margin: 0; }
+  .page { height: 1800px; background: linear-gradient(white 0 1200px, rgb(47,111,79) 1200px); }
+  #cookie { position: fixed; right: 20px; bottom: 20px; width: 300px; height: 120px; background: rgb(220,170,30); }
+</style>
+<div class="page"></div>
+<div id="cookie" role="dialog" aria-label="Cookie preferences">Cookie preferences</div>
+</html>

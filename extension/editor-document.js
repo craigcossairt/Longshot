@@ -90,9 +90,12 @@ export function loadImage(src) {
   });
 }
 
-export async function renderDocument(doc) {
+export async function renderDocument(doc, { baseImage = null } = {}) {
+  // Editor image objects are replaced, never mutated, when a crop/undo loads.
+  // Only reuse a fully decoded image belonging to this exact document snapshot.
+  const reusable = baseImage?.complete && baseImage.naturalWidth && baseImage.src === doc.baseDataUrl;
   const [base, overlays] = await Promise.all([
-    loadImage(doc.baseDataUrl),
+    reusable ? baseImage : loadImage(doc.baseDataUrl),
     Promise.all(doc.annotations.map((a) => a.type === "image" ? loadImage(a.src) : null)),
   ]);
   const canvas = document.createElement("canvas");
@@ -104,12 +107,16 @@ export async function renderDocument(doc) {
   return canvas;
 }
 
-export async function documentBlob(doc, type = "image/png", quality = 0.92) {
-  const canvas = await renderDocument(doc);
+export async function documentBlob(doc, type = "image/png", quality = 0.92, images) {
+  const canvas = await renderDocument(doc, images);
   return new Promise((resolve, reject) => canvas.toBlob((blob) => {
     if (blob) resolve(blob);
     else reject(new Error("This capture is too large to export. Crop it and try again."));
-  }, type, quality));
+  }, type, quality)).finally(() => {
+    // Release the full-size backing store promptly after encoding tall captures.
+    canvas.width = 0;
+    canvas.height = 0;
+  });
 }
 
 export function blobDataUrl(blob) {

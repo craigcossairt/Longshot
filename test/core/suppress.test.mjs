@@ -25,6 +25,7 @@ describe("shouldHide", () => {
       shouldHide(
         desc({
           position: "absolute",
+          viewportPinned: true,
           zIndex: 10,
           rect: { top: 0, height: 64, width: vw * 0.8 },
         }),
@@ -100,12 +101,22 @@ describe("shouldHide", () => {
   it("treats an absolute dialog footer as a bottom bar", () => {
     const footer = desc({
       position: "absolute",
+      viewportPinned: true,
       zIndex: "auto",
       viewportHeight: 800,
       rect: { top: 600, left: 100, width: 600, height: 56, bottom: 656 },
       anchor: { x: 80, y: 100, w: 680, h: 560 },
     });
     assert.equal(chromeKind(footer), "bottombar");
+    assert.equal(chromeKind({ ...footer, viewportPinned: false }), null, "scrolled absolute content is not chrome");
+  });
+
+  it("keeps wide absolute content crossing a viewport boundary", () => {
+    for (const top of [0, 760]) {
+      const content = desc({ position: "absolute", zIndex: 10, viewportHeight: 800,
+        rect: { top, left: 0, width: vw, height: 100 } });
+      assert.equal(shouldHide(content), false);
+    }
   });
 
   it("keeps a modal shell when only pinned bars should hide", () => {
@@ -122,6 +133,7 @@ describe("shouldHide", () => {
   it("uses HIDE_POLICY thresholds for the top-bar heuristic", () => {
     const almost = desc({
       position: "absolute",
+      viewportPinned: true,
       zIndex: HIDE_POLICY.minZIndex + 1,
       rect: {
         top: HIDE_POLICY.topMin,
@@ -134,7 +146,7 @@ describe("shouldHide", () => {
   });
 });
 
-function fakeEl({ id = "", position = "static", zIndex = "auto", rect = { top: 0, height: 40, width: 100 } } = {}) {
+function fakeEl({ id = "", position = "static", zIndex = "auto", parentElement = null, rect = { top: 0, height: 40, width: 100 } } = {}) {
   const left = rect.left || 0;
   const top = rect.top || 0;
   const width = rect.width || 0;
@@ -151,6 +163,7 @@ function fakeEl({ id = "", position = "static", zIndex = "auto", rect = { top: 0
     id,
     _position: position,
     _zIndex: String(zIndex),
+    parentElement,
     style: {
       vis: "",
       pri: "",
@@ -187,7 +200,7 @@ function installDoc(elements, policy) {
     innerWidth: vw,
     innerHeight: 800,
     getComputedStyle(el) {
-      return { position: el._position, zIndex: el._zIndex };
+      return { position: el._position, zIndex: el._zIndex, overflowY: el._overflowY, overflowX: el._overflowX };
     },
   };
   const document = {
@@ -216,6 +229,24 @@ afterEach(() => {
 });
 
 describe("installHideSession", () => {
+  it("only hides an absolute footer outside the scrolling content of a pinned shell", () => {
+    const shell = fakeEl({ position: "fixed" });
+    const scroller = fakeEl({ parentElement: shell });
+    scroller.scrollHeight = 1600;
+    scroller.clientHeight = 800;
+    scroller._overflowY = "auto";
+    const rect = { top: 760, left: 0, width: vw, height: 100 };
+    const content = fakeEl({ position: "absolute", rect });
+    const scrolledContent = fakeEl({ position: "absolute", rect, parentElement: scroller });
+    const footer = fakeEl({ position: "absolute", rect, parentElement: shell });
+    installDoc([content, scrolledContent, footer]);
+    assert.equal(content.style.getPropertyValue("visibility"), "");
+    assert.equal(scrolledContent.style.getPropertyValue("visibility"), "");
+    assert.equal(footer.style.getPropertyValue("visibility"), "hidden");
+    globalThis.__longshotHide.hide({ top: false, bottom: false });
+    assert.equal(footer.style.getPropertyValue("visibility"), "");
+  });
+
   it("hides position:sticky", () => {
     const sticky = fakeEl({ position: "sticky", rect: { top: 0, height: 64, width: vw } });
     installDoc([sticky]);
@@ -285,6 +316,7 @@ describe("installHideSession", () => {
   it("hides a high-z-index absolute top bar", () => {
     const bar = fakeEl({
       position: "absolute",
+      parentElement: fakeEl({ position: "fixed" }),
       zIndex: 10,
       rect: { top: 0, height: 64, width: vw * 0.8 },
     });
@@ -324,6 +356,7 @@ describe("installHideSession", () => {
   it("uses the inline fallback policy when none is passed", () => {
     const bar = fakeEl({
       position: "absolute",
+      parentElement: fakeEl({ position: "fixed" }),
       zIndex: 10,
       rect: { top: 0, height: 64, width: vw * 0.8 },
     });

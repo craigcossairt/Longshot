@@ -90,7 +90,9 @@ export function chromeKind(desc, policy = HIDE_POLICY) {
     if (frames.some((frame) => wideShort(box, frame, policy) && onTop(box, frame, policy))) return "topbar";
     return "fixed";
   }
-  if (pos !== "absolute") return null;
+  // Absolute positioning does not imply repeating chrome. Its containing
+  // structure must pin it outside the captured scrolling content.
+  if (pos !== "absolute" || !desc.viewportPinned) return null;
   const z = Number(desc.zIndex);
   const raised = Number.isFinite(z) && z > policy.minZIndex;
   if (frames.some((frame) => wideShort(box, frame, policy) && onBottom(box, frame, policy))) return "bottombar";
@@ -176,7 +178,18 @@ export function installHideSession(policy) {
     return false;
   }
 
-  function hideable(el, style, vw, vh, opts) {
+  function absolutePinned(el, view) {
+    for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+      const style = view.getComputedStyle(parent);
+      const scrolls = (parent.scrollHeight > parent.clientHeight + 1 && /(auto|scroll|overlay|hidden)/.test(style.overflowY)) ||
+        (parent.scrollWidth > parent.clientWidth + 1 && /(auto|scroll|overlay|hidden)/.test(style.overflowX));
+      if (scrolls) return false;
+      if (style.position === "fixed" || style.position === "sticky") return true;
+    }
+    return false;
+  }
+
+  function hideable(el, style, vw, vh, opts, view) {
     const pos = style.position;
     const rect = el.getBoundingClientRect();
     const left = rect.left || 0;
@@ -213,7 +226,7 @@ export function installHideSession(policy) {
       if (barsOnly) return false;
       return hideTop;
     }
-    if (pos !== "absolute") return false;
+    if (pos !== "absolute" || !absolutePinned(el, view)) return false;
     if (matches(box, frames, "bottom")) return hideBottom;
     if (!hideTop) return false;
     const z = Number(style.zIndex);
@@ -242,9 +255,9 @@ export function installHideSession(policy) {
       } catch {
         return;
       }
-      if (hideable(el, style, vw, vh, opts)) hideElement(el);
+      if (hideable(el, style, vw, vh, opts, view)) hideElement(el);
       else if (opts?.bottom === false && style.visibility !== "hidden" && style.visibility !== "collapse" && Number(style.opacity) !== 0 &&
-        hideable(el, style, vw, vh, { ...opts, top: false, bottom: true })) {
+        hideable(el, style, vw, vh, { ...opts, top: false, bottom: true }, view)) {
         const r = el.getBoundingClientRect();
         bottomRects.push({ x: r.left + offset.x, y: r.top + offset.y, w: r.width, h: r.height });
       }

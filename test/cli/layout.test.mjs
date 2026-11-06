@@ -96,6 +96,20 @@ function opts(url, out, width, height) {
 }
 
 describe("full-page layout", { timeout: 180000 }, () => {
+  for (const tall of [false, true]) {
+    it(`captures horizontal modal overflow${tall ? " on both axes" : " without vertical overflow"}`, async () => {
+      const url = new URL(pathToFileURL(join(root, "test/fixtures/modal-horizontal.html")));
+      if (tall) url.searchParams.set("tall", "1");
+      const result = await capture(opts(url.href, join(tmp, `horizontal-${tall}.png`), 800, 600));
+      const png = decodePng(readFileSync(result.path));
+      assert.deepEqual([png.width, png.height], [1200, tall ? 1000 : 600]);
+      assert.ok(near(pixel(png, 890, tall ? 770 : 370), [47, 111, 79, 255]), "far-right end of modal is visible");
+      assert.ok(near(pixel(png, 1190, 10), [155, 35, 202, 255]), "right margin remains visible");
+      assert.ok(near(pixel(png, 10, png.height - 10), [207, 171, 34, 255]), "bottom margin remains visible");
+      assert.ok(near(pixel(png, 1190, png.height - 10), [32, 48, 64, 255]), "expanded corner has backdrop");
+    });
+  }
+
   it("preserves the complete footer when the page is only one pixel taller than the viewport", async () => {
     const url = pathToFileURL(join(root, "test/fixtures/cli-near-footer.html")).href;
     const result = await capture(opts(url, join(tmp, "near-footer.png"), 800, 600));

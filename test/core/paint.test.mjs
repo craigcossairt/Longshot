@@ -100,6 +100,23 @@ describe("stitch", () => {
 });
 
 describe("compositeModal", () => {
+  it("expands both axes and retains the surrounding right and bottom margins", () => {
+    const base = solid(10, 6, [32, 48, 64, 255]);
+    const ctx = base.getContext("2d");
+    ctx.fillStyle = "rgb(155,35,202)";
+    ctx.fillRect(9, 0, 1, 1);
+    ctx.fillStyle = "rgb(207,171,34)";
+    ctx.fillRect(0, 5, 1, 1);
+    const column = solid(8, 8, [210, 75, 64, 255]);
+    const out = compositeModal(base, column, { x: 3, y: 1, w: 4, h: 4 }, 1, bufferCanvas);
+    const pixel = (x, y) => [...out.data.slice((y * out.width + x) * 4, (y * out.width + x) * 4 + 4)];
+    assert.deepEqual([out.width, out.height], [14, 10]);
+    assert.deepEqual(pixel(10, 8), [210, 75, 64, 255], "last content pixel survives");
+    assert.deepEqual(pixel(13, 0), [155, 35, 202, 255], "right margin moves right");
+    assert.deepEqual(pixel(0, 9), [207, 171, 34, 255], "bottom margin moves down");
+    assert.deepEqual(pixel(13, 9), [32, 48, 64, 255], "expanded corner is opaque");
+  });
+
   it("keeps the viewport width and places the dialog column at its on-screen x", () => {
     const base = solid(10, 6, [32, 48, 64, 255]);
     const column = solid(4, 8, [210, 75, 64, 255]);

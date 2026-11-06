@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -128,7 +128,17 @@ export function assertBaselineSafeOutput(imagePath, baselinePath) {
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   };
   const baseline = canonical(baselinePath);
-  if ([imagePath, verdictPath(imagePath)].some((path) => canonical(path) === baseline)) {
+  const identity = (path) => {
+    try { return statSync(path, { bigint: true }); }
+    catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  };
+  const baselineStat = identity(baselinePath);
+  if ([imagePath, verdictPath(imagePath)].some((path) => {
+    if (canonical(path) === baseline) return true;
+    const target = identity(path);
+    return baselineStat && target && baselineStat.ino !== 0n && target.ino !== 0n &&
+      baselineStat.dev === target.dev && baselineStat.ino === target.ino;
+  })) {
     const error = new Error("Output would overwrite --baseline; choose a different --out path");
     error.code = 2;
     throw error;

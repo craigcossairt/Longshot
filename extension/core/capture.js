@@ -49,7 +49,9 @@ export async function runTiledCapture({
           }
           const ax = Math.round(pos?.x ?? x);
           const ay = Math.round(pos?.y ?? y);
-          if (shots.some((shot) => shot.x === ax && shot.y === ay)) continue;
+          // The final frame reveals footer chrome hidden in earlier frames, even
+          // if scrolling clamped to a position we already captured.
+          if (!lastTile && shots.some((shot) => shot.x === ax && shot.y === ay)) continue;
           const dataUrl = await captureTile();
           shots.push({ x: ax, y: ay, dataUrl, ...(preserved?.bottomRects?.length ? { bottomRects: preserved.bottomRects } : {}) });
         } else {

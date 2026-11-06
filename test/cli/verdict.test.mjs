@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, linkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -9,11 +9,30 @@ import {
   compareToBaselineFile,
   compareVerdict,
   REGION_GRID,
+  assertBaselineSafeOutput,
 } from "../../cli/verdict.mjs";
 import { EXIT, parseArgs } from "../../cli/args.mjs";
 
 const tmp = mkdtempSync(join(tmpdir(), "longshot-verdict-"));
 after(() => rmSync(tmp, { recursive: true, force: true }));
+
+describe("baseline file identity", () => {
+  for (const sidecar of [false, true]) {
+    it(`rejects a hard-linked ${sidecar ? "verdict" : "image"} destination`, () => {
+      const baseline = join(tmp, `hardlink-${sidecar}.json`);
+      writeFileSync(baseline, "baseline");
+      const image = join(tmp, `target-${sidecar}.png`);
+      linkSync(baseline, sidecar ? join(tmp, `target-${sidecar}.verdict.json`) : image);
+      assert.throws(() => assertBaselineSafeOutput(image, baseline), /overwrite --baseline/);
+    });
+  }
+  it("rejects differently cased aliases on a case-insensitive filesystem", (t) => {
+    const baseline = join(tmp, "MixedCase.verdict.json");
+    writeFileSync(baseline, "baseline");
+    if (!existsSync(join(tmp, "mixedcase.verdict.json"))) return t.skip("filesystem is case-sensitive");
+    assert.throws(() => assertBaselineSafeOutput(join(tmp, "mixedcase.png"), baseline), /overwrite --baseline/);
+  });
+});
 
 function verdict(extra = {}) {
   const regions = Array.from({ length: REGION_GRID * REGION_GRID }, (_, i) => `r${i}`);

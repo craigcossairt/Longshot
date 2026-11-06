@@ -1,7 +1,6 @@
 /**
- * Paint a stitched dialog column back onto the viewport shot.
- * The column keeps its on-screen x, and extra scrolled height pushes the
- * page below the dialog down instead of leaving a transparent gap.
+ * Paint a stitched dialog back onto the viewport shot. Extra scrolled content
+ * pushes the surrounding page right/down instead of clipping it or leaving gaps.
  */
 export function compositeModal(base, column, crop, dpr, createCanvas, outputScale = 1) {
   if (outputScale !== 1) {
@@ -10,6 +9,19 @@ export function compositeModal(base, column, crop, dpr, createCanvas, outputScal
     base = resized;
   }
   const scale = (dpr || 1) * outputScale;
+  const extraW = Math.max(0, column.width - Math.round(crop.w * scale));
+  if (extraW > 0) {
+    const wide = createCanvas(base.width + extraW, base.height);
+    const ctx = wide.getContext("2d");
+    ctx.drawImage(base, 0, 0);
+    const cut = Math.min(base.width, Math.max(0, Math.round((crop.x + crop.w) * scale)));
+    const sample = backdropSample(ctx, base, crop, scale);
+    ctx.fillStyle = `rgba(${sample[0]}, ${sample[1]}, ${sample[2]}, ${sample[3] / 255})`;
+    ctx.fillRect(cut, 0, extraW, wide.height);
+    const right = base.width - cut;
+    if (right > 0) ctx.drawImage(base, cut, 0, right, base.height, cut + extraW, 0, right, base.height);
+    base = wide;
+  }
   const extra = Math.max(0, column.height - Math.round(crop.h * scale));
   const canvas = createCanvas(base.width, base.height + extra);
   const ctx = canvas.getContext("2d");

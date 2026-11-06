@@ -74,10 +74,15 @@ it("CDP subprocess exits, preserves existing tabs, and captures strict CSP witho
   const launch = { headless: true, args: [`--remote-debugging-port=${port}`] };
   if (channel !== "chromium") launch.channel = channel;
   const browser = await chromium.launch(launch);
+  let observer;
   try {
-    const existing = await browser.newPage();
+    observer = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const existing = await observer.contexts()[0].newPage();
     await existing.setContent('<input value="unsaved work">');
     const before = existing.url();
+    const targetIds = async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json())
+      .filter((target) => target.type === "page").map((target) => target.id).sort();
+    const beforeTargets = await targetIds();
     const strictFixture = pathToFileURL(join(root, "test/fixtures/csp.html")).href;
     const result = await new Promise((resolve, reject) => {
       execFile(process.execPath, [join(root, "longshot.js"), "--url", strictFixture,
@@ -91,9 +96,9 @@ it("CDP subprocess exits, preserves existing tabs, and captures strict CSP witho
     assert.equal(browser.isConnected(), true, "external browser remains running");
     assert.equal(existing.url(), before);
     assert.equal(await existing.locator("input").inputValue(), "unsaved work");
-    const pages = browser.contexts().flatMap((context) => context.pages());
-    assert.equal(pages.some((page) => page.url() === strictFixture), false, "capture tab was closed");
+    assert.deepEqual(await targetIds(), beforeTargets, "capture tab was closed and existing targets remain");
   } finally {
+    await observer?.close();
     await browser.close();
   }
 });

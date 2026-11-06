@@ -77,27 +77,49 @@ describe("runTiledCapture", () => {
       captureTile: async () => "data:tile",
       delay: async () => {},
     });
-    assert.equal(result.tiles, 1);
+    assert.equal(result.tiles, 2);
     assert.equal(result.fullW, 800);
     assert.equal(result.fullH, 800);
   });
 
-  it("skips a duplicate actual scroll position", async () => {
+  it("skips an intermediate duplicate but captures the last position again", async () => {
     let n = 0;
     const result = await runTiledCapture({
       mode: "full",
-      dim: dimFor({ scrollWidth: 800, scrollHeight: 1000, vw: 800, vh: 800 }),
+      dim: dimFor({ scrollWidth: 800, scrollHeight: 2000, vw: 800, vh: 800 }),
       scroll: async (x, y) => {
         n += 1;
-        if (n === 2) return { x: 0, y: 0 };
-        return { x, y };
+        return { x: 0, y: 0 };
       },
       hideChrome: async () => {},
       reset: async () => {},
       captureTile: async () => "data:tile",
       delay: async () => {},
     });
-    assert.equal(result.tiles, 1);
+    assert.equal(n, 3);
+    assert.equal(result.tiles, 2);
+  });
+
+  it("retains the final frame and footer rectangles when its scroll position clamps", async () => {
+    let bottomVisible = false;
+    const bottomRects = [{ x: 0, y: 740, w: 800, h: 60 }];
+    const result = await runTiledCapture({
+      mode: "full",
+      dim: dimFor({ scrollWidth: 800, scrollHeight: 1000, vw: 800, vh: 800 }),
+      scroll: async () => ({ x: 0, y: 0 }),
+      hideChrome: async ({ bottom }) => {
+        bottomVisible = !bottom;
+        return bottomVisible ? { bottomRects } : {};
+      },
+      reset: async () => {},
+      captureTile: async () => bottomVisible ? "data:footer" : "data:content",
+      delay: async () => {},
+    });
+    assert.deepEqual(result.shots, [
+      { x: 0, y: 0, dataUrl: "data:content" },
+      { x: 0, y: 0, dataUrl: "data:footer", bottomRects },
+    ]);
+    assert.equal(result.fullH, 800);
   });
 
   it("places a visible capture at (0,0) regardless of scroll", async () => {

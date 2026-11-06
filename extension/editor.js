@@ -63,38 +63,43 @@ let zoom = 1;
 let zoomMode = "fit";
 const imgCache = new Map();
 const saveStatus = document.getElementById("saveStatus");
+const retrySave = document.getElementById("retrySave");
 let ready = false;
-let savedSignature = "";
-let observedSignature = "";
+let documentVersion = 0;
+let savedVersion = 0;
+let observedVersion = 0;
 let saveTimer;
 let saving = null;
 let loadGeneration = 0;
 let imageTransition = Promise.resolve();
 let loadingImage = false;
-const imageIds = new WeakMap();
-let nextImageId = 0;
 
 function currentDocument() {
   return { version: 1, baseDataUrl: image.src, width: canvas.width, height: canvas.height, annotations: cloneAnns(anns) };
 }
 
-function documentSignature() {
-  if (!imageIds.has(image)) imageIds.set(image, ++nextImageId);
-  return JSON.stringify([imageIds.get(image), canvas.width, canvas.height, anns]);
+function documentChanged() {
+  documentVersion += 1;
+  scheduleSave();
 }
 
-function status(text, error = false) {
+function updateAnnotations(next) {
+  anns = next;
+  documentChanged();
+}
+
+function status(text, error = false, canRetry) {
   saveStatus.textContent = text;
   saveStatus.classList.toggle("save-error", error);
+  if (canRetry !== undefined) retrySave.hidden = !canRetry;
 }
 
 function scheduleSave() {
   if (!ready) return;
-  const signature = documentSignature();
-  if (signature === observedSignature) return;
-  observedSignature = signature;
+  if (documentVersion === observedVersion) return;
+  observedVersion = documentVersion;
   clearTimeout(saveTimer);
-  status("Saving...");
+  status("Saving...", false, false);
   saveTimer = setTimeout(() => { void flushSave().catch(() => {}); }, 180);
 }
 
@@ -103,25 +108,30 @@ async function flushSave() {
   await imageTransition;
   if (saving) return saving;
   saving = (async () => {
-    while (ready && savedSignature !== documentSignature()) {
+    while (ready && savedVersion !== documentVersion) {
       await imageTransition;
       const doc = currentDocument();
-      const signature = documentSignature();
-      status("Saving...");
-      const blob = await documentBlob(doc, mimeFor(record.format));
+      const version = documentVersion;
+      status("Saving...", false, false);
+      const blob = await documentBlob(doc, mimeFor(record.format), 0.92, { baseImage: image });
       const format = blob.type === "image/jpeg" ? "jpeg" : blob.type === "image/webp" ? "webp" : blob.type === "image/avif" ? "avif" : "png";
       const dataUrl = await blobDataUrl(blob);
       record = await longshotHistoryUpdate({ ...record, document: doc, dataUrl, format,
         width: doc.width, height: doc.height, edited: true });
-      savedSignature = signature;
+      savedVersion = version;
     }
-    status("Saved on this device");
+    status("Saved on this device", false, false);
   })().catch((error) => {
-    status(`Not saved: ${error?.message || error}`, true);
+    status(`Not saved: ${error?.message || error}`, true, true);
     throw error;
   }).finally(() => { saving = null; });
   return saving;
 }
+
+retrySave.addEventListener("click", () => {
+  closeTextEditor(true);
+  void flushSave().catch(() => {});
+});
 
 async function navigateTo(url) {
   closeTextEditor(true);
@@ -132,7 +142,7 @@ async function navigateTo(url) {
 }
 
 window.addEventListener("beforeunload", (event) => {
-  if (ready && savedSignature !== documentSignature()) {
+  if (ready && savedVersion !== documentVersion) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -175,15 +185,19 @@ function replaceBaseImage(src, apply) {
       canvas.height = next.naturalHeight;
       loadingImage = false;
       apply();
+      documentChanged();
       render();
       applyZoomStyles();
       resolve();
     };
     next.onerror = () => {
+      if (generation !== loadGeneration) { resolve(); return; }
       loadingImage = false;
       syncEditButtons();
       status("Could not load the edited image. Undo and try again.", true);
       reject(new Error("Could not load the edited image."));
+      // Existing waiters still reject; a recovered document can save/export again.
+      imageTransition = Promise.resolve();
     };
     next.src = src;
   });
@@ -199,7 +213,7 @@ function restoreFrame(next) {
     replaceBaseImage(next.src, () => { anns = cloneAnns(next.anns); });
     return;
   }
-  anns = cloneAnns(next.anns);
+  updateAnnotations(cloneAnns(next.anns));
   render();
   syncEditButtons();
 }
@@ -338,9 +352,9 @@ function closeTextEditor(save) {
   textEdit.hidden = true;
   if (save) {
     if (!value.trim()) {
-      anns = anns.filter((a) => a.id !== id);
-    } else {
-      anns = anns.map((a) => (a.id === id ? { ...a, text: value } : a));
+      updateAnnotations(anns.filter((a) => a.id !== id));
+    } else if (anns.find((a) => a.id === id)?.text !== value) {
+      updateAnnotations(anns.map((a) => (a.id === id ? { ...a, text: value } : a)));
     }
   }
   render();
@@ -557,7 +571,6 @@ function render() {
     }
   }
   syncEditButtons();
-  scheduleSave();
 }
 
 function pos(e) {
@@ -615,7 +628,7 @@ canvas.addEventListener("pointerdown", (e) => {
   if (tool === "emoji") {
     snapshot();
     const id = uid();
-    anns.push({ id, type: "emoji", x: p.x, y: p.y, emoji: stamp, size: 48, color });
+    updateAnnotations([...anns, { id, type: "emoji", x: p.x, y: p.y, emoji: stamp, size: 48, color }]);
     selectedId = null;
     render();
     return;
@@ -627,7 +640,7 @@ canvas.addEventListener("pointerdown", (e) => {
     }
     snapshot();
     const id = uid();
-    anns.push({ id, type: "image", x: p.x, y: p.y, bw: 240, bh: 160, src: pendingImageSrc, color });
+    updateAnnotations([...anns, { id, type: "image", x: p.x, y: p.y, bw: 240, bh: 160, src: pendingImageSrc, color }]);
     selectedId = null;
     pendingImageSrc = null;
     render();
@@ -661,17 +674,17 @@ canvas.addEventListener("pointermove", (e) => {
     render();
     return;
   }
-  if (drag && e.buttons === 1) {
+  if (drag?.id && e.buttons === 1) {
     if (!drag.snapped) {
       snapshot();
       drag.snapped = true;
     }
     const dx = p.x - drag.last.x;
     const dy = p.y - drag.last.y;
-    anns = anns.map((a) => {
+    updateAnnotations(anns.map((a) => {
       if (a.id !== drag.id) return a;
       return drag.mode === "resize" ? resizeAnn(a, drag.handle, dx, dy) : moveAnn(a, dx, dy);
-    });
+    }));
     drag.last = p;
     render();
     return;
@@ -689,7 +702,7 @@ canvas.addEventListener("pointerup", () => {
   if (drag?.mode === "text-place") {
     snapshot();
     const next = { id: uid(), type: "text", x: drag.last.x, y: drag.last.y, text: "", color, fontSize: 28 };
-    anns.push(next);
+    updateAnnotations([...anns, next]);
     drag = null;
     openTextEditor(next);
     return;
@@ -700,7 +713,7 @@ canvas.addEventListener("pointerup", () => {
   drag = null;
   if (drawing) {
     snapshot();
-    anns.push(drawing);
+    updateAnnotations([...anns, drawing]);
     selectedId = null;
     drawing = null;
     render();
@@ -737,7 +750,7 @@ COLORS.forEach((c) => {
     document.querySelectorAll(".swatches i").forEach((el) => el.classList.toggle("on", el === i));
     if (selectedId) {
       snapshot();
-      anns = anns.map((a) => (a.id === selectedId ? { ...a, color: c } : a));
+      updateAnnotations(anns.map((a) => (a.id === selectedId ? { ...a, color: c } : a)));
       render();
     }
   });
@@ -810,16 +823,15 @@ clearBtn.addEventListener("click", () => {
   if (!anns.length) return;
   closeTextEditor(false);
   snapshot();
-  anns = [];
+  updateAnnotations([]);
   selectedId = null;
   render();
 });
 textEdit.addEventListener("pointerdown", (e) => e.stopPropagation());
 textEdit.addEventListener("input", () => {
   if (!editingTextId) return;
-  anns = anns.map((a) => (a.id === editingTextId ? { ...a, text: textEdit.value } : a));
+  updateAnnotations(anns.map((a) => (a.id === editingTextId ? { ...a, text: textEdit.value } : a)));
   layoutTextEditor();
-  scheduleSave();
 });
 textEdit.addEventListener("blur", () => closeTextEditor(true));
 textEdit.addEventListener("keydown", (e) => {
@@ -832,7 +844,7 @@ textEdit.addEventListener("keydown", (e) => {
 deleteBtn.addEventListener("click", () => {
   if (!selectedId) return;
   snapshot();
-  anns = anns.filter((a) => a.id !== selectedId);
+  updateAnnotations(anns.filter((a) => a.id !== selectedId));
   selectedId = null;
   render();
 });
@@ -877,7 +889,7 @@ window.addEventListener("keydown", (e) => {
 async function toBlob(type, quality) {
   await imageTransition;
   closeTextEditor(true);
-  return documentBlob(currentDocument(), type, quality);
+  return documentBlob(currentDocument(), type, quality, { baseImage: image });
 }
 
 function mimeFor(format) {
@@ -943,9 +955,9 @@ function loadRecord(next) {
     undoStack = [];
     redoStack = [];
     document.getElementById("applyCrop").hidden = true;
-    savedSignature = observedSignature = documentSignature();
+    documentVersion = savedVersion = observedVersion = 0;
     ready = true;
-    status("Saved on this device");
+    status("Saved on this device", false, false);
     render();
     zoomToFit();
   };

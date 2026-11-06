@@ -159,7 +159,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings, place 
     bytes: dataUrlToBytes(shot.dataUrl),
   }));
   const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
-  const outputW = place ? place.width : fullW * dpr;
+  const outputW = place ? place.width + Math.max(0, fullW * dpr - place.crop.w * dpr) : fullW * dpr;
   const outputH = place ? place.height + Math.max(0, fullH * dpr - place.crop.h * dpr) : fullH * dpr;
   const raw = await page.evaluate(
     async ({ shots, geom, mime, quality, place }) => {
@@ -204,12 +204,28 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings, place 
       let out = canvas;
       if (place?.base && place.crop) {
         const baseBmp = await createImageBitmap(new Blob([place.base], { type: "image/png" }));
-        const baseW = Math.max(1, Math.round(baseBmp.width * geom.scale));
+        let baseW = Math.max(1, Math.round(baseBmp.width * geom.scale));
         const baseH = Math.max(1, Math.round(baseBmp.height * geom.scale));
+        const extraW = Math.max(0, canvas.width - Math.round(place.crop.w * k));
+        const base = new OffscreenCanvas(baseW + extraW, baseH);
+        const bctx = base.getContext("2d");
+        bctx.drawImage(baseBmp, 0, 0, baseW, baseH);
+        if (extraW > 0) {
+          const cut = Math.min(baseW, Math.max(0, Math.round((place.crop.x + place.crop.w) * k)));
+          const sampleY = Math.max(0, Math.min(baseH - 1, Math.round(place.crop.y * k) + 2));
+          const left = Math.round(place.crop.x * k) - 2;
+          const right = Math.round((place.crop.x + place.crop.w) * k) + 2;
+          const pixel = bctx.getImageData(left >= 0 ? left : right < baseW ? right : 0, sampleY, 1, 1).data;
+          bctx.fillStyle = `rgba(${pixel[0]}, ${pixel[1]}, ${pixel[2]}, ${pixel[3] / 255})`;
+          bctx.fillRect(cut, 0, extraW, baseH);
+          if (baseW > cut) bctx.drawImage(baseBmp, cut / geom.scale, 0, (baseW - cut) / geom.scale, baseBmp.height,
+            cut + extraW, 0, baseW - cut, baseH);
+          baseW += extraW;
+        }
         const extra = Math.max(0, canvas.height - Math.round(place.crop.h * k));
         const merged = new OffscreenCanvas(baseW, baseH + extra);
         const mctx = merged.getContext("2d");
-        mctx.drawImage(baseBmp, 0, 0, baseW, baseH);
+        mctx.drawImage(base, 0, 0);
         if (extra > 0) {
           const cut = Math.min(baseH, Math.max(0, Math.round((place.crop.y + place.crop.h) * k)));
           const sampleY = Math.max(0, Math.min(baseH - 1, Math.round(place.crop.y * k) + 2));
@@ -221,7 +237,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings, place 
           mctx.fillRect(0, cut, merged.width, extra);
           const below = baseH - cut;
           if (below > 0) {
-            mctx.drawImage(baseBmp, 0, cut / geom.scale, baseBmp.width, below / geom.scale,
+            mctx.drawImage(base, 0, cut, baseW, below,
               0, cut + extra, baseW, below);
           }
         }
@@ -268,6 +284,10 @@ async function reencodeEncoded(page, encoded, { width, height, mime, quality }) 
 
 async function applyByteBudget(page, encoded, settings) {
   if (!settings.maxFileMB) return encoded;
+  const outputSize = (image) => settings.outputIsPdf
+    ? jpegToPdfBlob(image.data, image.width, image.height, settings.pdfTitle).size
+    : image.data.byteLength;
+  if (outputSize(encoded) <= settings.maxFileMB * 1024 * 1024) return encoded;
   const useQ = usesQuality(settings.format === "pdf" ? "jpeg" : settings.format);
   const cache = new Map();
   const fakeCanvas = (width, height) => ({
@@ -283,13 +303,13 @@ async function applyByteBudget(page, encoded, settings) {
         const next = await reencodeEncoded(page, encoded, {
           width: canvas.width, height: canvas.height, mime: type, quality: q,
         });
-        cache.set(key, { ...next, size: next.data.byteLength });
+        cache.set(key, { ...next, size: outputSize(next) });
       }
       return cache.get(key);
     },
   });
   if (!fitted.fits) {
-    throw new Error(`Cannot meet --max-bytes (${Math.floor(settings.maxFileMB * 1024 * 1024)}); smallest encoded image is ${fitted.encoded.size} bytes`);
+    throw new Error(`Cannot meet --max-bytes (${Math.floor(settings.maxFileMB * 1024 * 1024)}); smallest encoded ${settings.outputIsPdf ? "PDF" : "image"} is ${fitted.encoded.size} bytes`);
   }
   return fitted.encoded;
 }
@@ -538,6 +558,7 @@ function settingsFromOptions(options) {
   return {
     ...DEFAULTS,
     format,
+    outputIsPdf: options.format === "pdf",
     quality: DEFAULTS.quality,
     maxFileMB: options.maxBytes ? options.maxBytes / (1024 * 1024) : 0,
     downloadDirectory: "Longshot",
@@ -589,6 +610,7 @@ export async function capture(options) {
 }
 
 async function captureOnPage(page, options, settings) {
+  if (settings.outputIsPdf) settings = { ...settings, pdfTitle: await page.title() || "Page" };
   let result;
   if (options.selector) result = await selectorCapture(page, options, settings);
   else if (options.region) result = await regionCapture(page, options, settings);

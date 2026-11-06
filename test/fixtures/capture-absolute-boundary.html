@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Absolute content at a tile boundary</title>
+<style>
+  html, body { margin: 0; }
+  body { position: relative; height: 1800px; background: white; }
+  #content { position: absolute; top: 550px; left: 0; width: 100%; height: 100px; z-index: 10; background: rgb(220,170,30); }
+  #end { position: absolute; top: 1750px; left: 0; width: 100%; height: 50px; background: rgb(47,111,79); }
+</style>
+<div id="content"></div>
+<div id="end"></div>
+</html>

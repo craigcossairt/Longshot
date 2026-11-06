@@ -25,6 +25,7 @@ header { justify-content: space-between; flex-wrap: wrap; }
 .meta { color: var(--muted); font-size: 12px; }
 .save-status { color: var(--muted); font-size: 12px; max-width: 48ch; }
 .save-status.save-error { color: var(--fg); }
+.retry-save { margin-top: 4px; min-height: 44px; }
 .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .actions a.icon {
   width: 36px;

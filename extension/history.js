@@ -83,6 +83,20 @@ export async function longshotHistoryGet(id) {
   });
 }
 
+export async function longshotHistoryList() {
+  return transaction("readonly", (captures, _deleted, done) => {
+    const items = [];
+    captures.index("updatedAt").openCursor(null, "prev").onsuccess = (event) => {
+      const cursor = event.target.result;
+      if (!cursor) { done(items); return; }
+      const { dataUrl, document: _document, ...summary } = cursor.value;
+      items.push({ ...summary, thumbUrl: summary.thumbUrl || dataUrl,
+        byteSize: summary.byteSize || longshotByteSize(dataUrl) });
+      cursor.continue();
+    };
+  });
+}
+
 async function makeThumb(dataUrl) {
   let bmp;
   try {

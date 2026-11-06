@@ -96,6 +96,17 @@
     return false;
   }
 
+  function absolutePinned(el, view) {
+    for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+      const style = view.getComputedStyle(parent);
+      const scrolls = (parent.scrollHeight > parent.clientHeight + 1 && /(auto|scroll|overlay|hidden)/.test(style.overflowY)) ||
+        (parent.scrollWidth > parent.clientWidth + 1 && /(auto|scroll|overlay|hidden)/.test(style.overflowX));
+      if (scrolls) return false;
+      if (style.position === "fixed" || style.position === "sticky") return true;
+    }
+    return false;
+  }
+
   function hideFloating(root = document, opts) {
     const view = root.defaultView || window;
     const vw = view.innerWidth || window.innerWidth;
@@ -149,7 +160,7 @@
         if (!barsOnly && hideTop) hideElement(el);
         return;
       }
-      if (pos !== "absolute") return;
+      if (pos !== "absolute" || !absolutePinned(el, view)) return;
       if (barMatch(box, frames, "bottom")) {
         if (hideBottom) hideElement(el);
         return;

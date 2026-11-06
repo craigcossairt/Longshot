@@ -14,7 +14,90 @@ async function withCapture(fixture, fn) {
   } finally { await ext.context.close(); }
 }
 describe("capture safety and output correctness", { timeout: 180000 }, () => {
-  for (const change of ["switch", "navigate", "switch-back"]) {
+  for (const browserBar of [false, true]) {
+    for (const limit of ["percentage", "maxWidth"]) {
+      it(`scales ${browserBar ? "browser" : "URL"} bar text and controls with ${limit}`, async () => {
+        await withCapture("capture-backgrounds.html", async (ext, page, popup) => {
+          await setSettings(ext.worker, {
+            includeBrowserBar: browserBar, includeUrlBar: !browserBar,
+            ...(limit === "percentage" ? {scalePercent: 50} : {maxWidth: 400}),
+          });
+          assert.deepEqual(await requestCapture(popup), {ok: true});
+          const record = await currentCapture(ext.worker);
+          assert.deepEqual([record.width, record.height], [400, 900 + (browserBar ? 43 : 18)]);
+          const rendered = await page.evaluate(async ({dataUrl, browserBar}) => {
+            const bmp = await createImageBitmap(await (await fetch(dataUrl)).blob());
+            const canvas = new OffscreenCanvas(bmp.width, bmp.height);
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(bmp, 0, 0);
+            const text = ctx.getImageData(10, browserBar ? 27 : 5, 300, 10).data;
+            let dark = 0;
+            for (let i = 0; i < text.length; i += 4) if (text[i] < 140 && text[i+1] < 140 && text[i+2] < 140) dark++;
+            return {dark, control: [...ctx.getImageData(11, 10, 1, 1).data]};
+          }, {dataUrl: record.dataUrl, browserBar});
+          assert.ok(rendered.dark > 30, `URL text must be visible inside its scaled bar: ${rendered.dark} dark pixels`);
+          if (browserBar) assert.deepEqual(rendered.control, [225, 90, 74, 255], "window control scales to half size");
+        });
+      });
+    }
+  }
+  for (const tall of [false, true]) {
+    it(`captures horizontal modal overflow${tall ? " on both axes at 50 percent" : " without vertical overflow"}`, async () => {
+      await withCapture(`modal-horizontal.html${tall ? "?tall=1" : ""}`, async (ext, page, popup) => {
+        const scale = tall ? 0.5 : 1;
+        await setSettings(ext.worker, {scalePercent: scale * 100});
+        assert.deepEqual(await requestCapture(popup), {ok: true});
+        const record = await currentCapture(ext.worker);
+        assert.deepEqual([record.width, record.height], [1200 * scale, (tall ? 1000 : 600) * scale]);
+        const pixels = await page.evaluate(async ({dataUrl, scale, tall}) => {
+          const bmp = await createImageBitmap(await (await fetch(dataUrl)).blob());
+          const ctx = new OffscreenCanvas(bmp.width, bmp.height).getContext("2d");
+          ctx.drawImage(bmp, 0, 0);
+          return [[890, tall ? 770 : 370], [1190, 10], [10, tall ? 990 : 590], [1190, tall ? 990 : 590]]
+            .map(([x, y]) => [...ctx.getImageData(x * scale, y * scale, 1, 1).data]);
+        }, {dataUrl: record.dataUrl, scale, tall});
+        assert.deepEqual(pixels, [[47,111,79,255], [155,35,202,255], [207,171,34,255], [32,48,64,255]]);
+      });
+    });
+  }
+
+  it("keeps capturing when an iframe navigates without changing the main document", async () => {
+    await withCapture("capture-near-footer.html", async (ext, page, popup) => {
+      await page.evaluate(() => new Promise((resolve) => {
+        const frame = document.createElement("iframe");
+        frame.id = "refreshing-frame";
+        frame.style.display = "none";
+        frame.onload = resolve;
+        frame.src = "capture-backgrounds.html";
+        document.body.append(frame);
+      }));
+      await ext.worker.evaluate(() => {
+        globalThis.frameLoadingUpdates = 0;
+        chrome.tabs.onUpdated.addListener((id, change) => {
+          if (change.status === "loading") globalThis.frameLoadingUpdates++;
+        });
+        const original = chrome.tabs.captureVisibleTab.bind(chrome.tabs);
+        let changed = false;
+        chrome.tabs.captureVisibleTab = async (windowId, options) => {
+          const data = await original(windowId, options);
+          if (!changed) {
+            changed = true;
+            const [tab] = await chrome.tabs.query({active: true, windowId});
+            await chrome.scripting.executeScript({target: {tabId: tab.id}, func: () => new Promise((resolve) => {
+              const frame = document.querySelector("#refreshing-frame");
+              frame.onload = resolve;
+              frame.src = "capture-backgrounds.html?refresh=1";
+            })});
+          }
+          return data;
+        };
+      });
+      assert.deepEqual(await requestCapture(popup), {ok: true});
+      assert.ok(await ext.worker.evaluate(() => globalThis.frameLoadingUpdates > 0), "iframe emits tab loading updates");
+      assert.equal((await currentCapture(ext.worker)).height, 601);
+    });
+  });
+  for (const change of ["switch", "navigate", "switch-back", "reload"]) {
     it(`discards a capture if the tab changes during the screenshot (${change})`, async () => {
       await withCapture("capture-near-footer.html", async (ext, page, popup) => {
         await ext.worker.evaluate(({ change, url }) => {
@@ -25,7 +108,8 @@ describe("capture safety and output correctness", { timeout: 180000 }, () => {
             if (!changed) {
               changed = true;
               const [tab] = await chrome.tabs.query({active: true, windowId});
-              if (change === "navigate") await chrome.tabs.update(tab.id, {url});
+              if (change === "reload") await chrome.tabs.reload(tab.id);
+              else if (change === "navigate") await chrome.tabs.update(tab.id, {url});
               else {
                 await chrome.tabs.create({windowId, url, active: true});
                 if (change === "switch-back") await chrome.tabs.update(tab.id, {active: true});
@@ -38,7 +122,7 @@ describe("capture safety and output correctness", { timeout: 180000 }, () => {
         assert.equal(result.ok, false);
         assert.match(result.error, /cancelled.*changed/i);
         assert.equal(await currentCapture(ext.worker), null, "interrupted capture is never saved");
-        if (change !== "navigate") assert.equal(await page.locator("#longshot-capture-style").count(), 0);
+        if (change !== "navigate" && change !== "reload") assert.equal(await page.locator("#longshot-capture-style").count(), 0);
       });
     });
   }

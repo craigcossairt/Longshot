@@ -2,7 +2,7 @@ import {
   longshotByteSize,
   longshotFormatBytes,
   longshotHistoryDelete,
-  longshotHistoryGetAll,
+  longshotHistoryList,
   longshotHistoryGet,
 } from "./history.js";
 import { exportCapture } from "./export.js";
@@ -141,7 +141,7 @@ deleteBtn.addEventListener("click", async () => {
 });
 
 async function refresh() {
-  items = await longshotHistoryGetAll();
+  items = await longshotHistoryList();
   const ids = new Set(items.map((item) => item.id));
   for (const id of selected) if (!ids.has(id)) selected.delete(id);
   render();
