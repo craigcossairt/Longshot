@@ -69,10 +69,36 @@ async function longshotWriteToDir(handle, filename, blob) {
     perm = await handle.requestPermission({ mode: "readwrite" });
   }
   if (perm !== "granted") throw new Error("Folder permission needed");
-  const fileHandle = await handle.getFileHandle(longshotLeafName(filename), { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(blob);
-  await writable.close();
+  // A shared origin lock also serializes writes from different editor tabs and
+  // the service worker. getFileHandle({create:true}) alone overwrites collisions.
+  if (!globalThis.navigator?.locks) throw new Error("Safe folder saving is unavailable");
+  return navigator.locks.request("longshot-folder-write", async () => {
+    const leaf = longshotLeafName(filename) || "capture";
+    const dot = leaf.lastIndexOf(".");
+    const stem = dot > 0 ? leaf.slice(0, dot) : leaf;
+    const ext = dot > 0 ? leaf.slice(dot) : "";
+    let name = leaf;
+    for (let suffix = 1; ; suffix++) {
+      try {
+        await handle.getFileHandle(name);
+      } catch (error) {
+        if (error?.name === "NotFoundError") break;
+        // A directory with this name is a collision too.
+        if (error?.name !== "TypeMismatchError") throw error;
+      }
+      name = `${stem} (${suffix})${ext}`;
+    }
+    const fileHandle = await handle.getFileHandle(name, { create: true });
+    const writable = await fileHandle.createWritable();
+    try {
+      await writable.write(blob);
+      await writable.close();
+    } catch (error) {
+      await writable.abort().catch(() => {});
+      throw error;
+    }
+    return name;
+  });
 }
 
 export { longshotClearDirHandle, longshotGetDirHandle, longshotSetDirHandle, longshotWriteToDir };

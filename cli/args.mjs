@@ -152,7 +152,7 @@ export function helpText() {
   return `Longshot CLI — full-page screenshots with sticky-header suppression.
 
 Usage:
-  node cli/longshot.mjs --url <url> [options]
+  longshot --url <url> [options]
 
 Options:
   --url <url>                 Required.

@@ -8,12 +8,13 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
       - name: Syntax check
         run: |
+          node --check longshot.js
           find extension cli test tools \( -name '*.js' -o -name '*.mjs' \) | while read -r f; do
             node --check "$f"
           done
@@ -27,5 +28,9 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node --test test/cli/*.test.mjs
+      - name: Extension tests
+        run: node --test test/extension/*.test.mjs
       - name: Manifest and package
         run: node tools/pack-extension.mjs artifacts/longshot-extension.zip
+      - name: Installed npm package
+        run: npm run check:package

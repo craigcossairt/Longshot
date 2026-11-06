@@ -42,7 +42,7 @@ export function jpegToPdfBlob(jpeg, width, height, title) {
   for (let i = 1; i < xref.length; i++) {
     xrefTable += `${String(xref[i]).padStart(10, "0")} 00000 n \n`;
   }
-  const trailer = `trailer << /Size ${objects.length + 1} /Root 1 0 R /Info << /Title (${(title || "Capture").replace(/[()]/g, "")}) >> >>\nstartxref\n${xrefStart}\n%%EOF`;
+  const trailer = `trailer << /Size ${objects.length + 1} /Root 1 0 R /Info << /Title (${(title || "Capture").replace(/[()\\]/g, "")}) >> >>\nstartxref\n${xrefStart}\n%%EOF`;
   chunks.push(encoder.encode(xrefTable + trailer));
   return new Blob(chunks, { type: "application/pdf" });
 }

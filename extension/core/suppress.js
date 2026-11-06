@@ -220,7 +220,7 @@ export function installHideSession(policy) {
     return Boolean(matches(box, frames, "top") && Number.isFinite(z) && z > p.minZIndex);
   }
 
-  function hideFloating(root, opts) {
+  function hideFloating(root, opts, bottomRects = [], offset = { x: 0, y: 0 }) {
     const view = root.defaultView || globalThis;
     const vw = view.innerWidth || globalThis.innerWidth;
     const vh = view.innerHeight || globalThis.innerHeight || vw;
@@ -243,12 +243,18 @@ export function installHideSession(policy) {
         return;
       }
       if (hideable(el, style, vw, vh, opts)) hideElement(el);
+      else if (opts?.bottom === false && style.visibility !== "hidden" && style.visibility !== "collapse" && Number(style.opacity) !== 0 &&
+        hideable(el, style, vw, vh, { ...opts, top: false, bottom: true })) {
+        const r = el.getBoundingClientRect();
+        bottomRects.push({ x: r.left + offset.x, y: r.top + offset.y, w: r.width, h: r.height });
+      }
     });
     root.querySelectorAll("iframe, frame").forEach((frame) => {
       try {
         if (frame.contentDocument) {
           const nested = { top: opts && opts.top, bottom: opts && opts.bottom, barsOnly: opts && opts.barsOnly };
-          hideFloating(frame.contentDocument, nested);
+          const r = frame.getBoundingClientRect();
+          hideFloating(frame.contentDocument, nested, bottomRects, { x: offset.x + r.left + frame.clientLeft, y: offset.y + r.top + frame.clientTop });
         }
       } catch {
         /* cross-origin */
@@ -259,7 +265,9 @@ export function installHideSession(policy) {
   globalThis.__longshotHide = {
     hide(opts) {
       while (restores.length) restores.pop()();
-      hideFloating(globalThis.document, opts);
+      const bottomRects = [];
+      hideFloating(globalThis.document, opts, bottomRects);
+      return { bottomRects };
     },
     reset() {
       while (restores.length) restores.pop()();

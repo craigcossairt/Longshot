@@ -1,7 +1,9 @@
 import { jpegToPdfBlob } from "./core/pdf.js";
+import { exportCapture } from "./export.js";
 import { sendLongshotFeedback } from "./feedback.js";
 import { installHostCapture } from "./host-capture.js";
-import { longshotByteSize, longshotHistoryGet, longshotPushHistory } from "./history.js";
+import { longshotHistoryGet, longshotHistoryUpdate } from "./history.js";
+import { drawAnnotation, documentBlob, blobDataUrl } from "./editor-document.js";
 import {
   ZOOM_MAX,
   ZOOM_MIN,
@@ -60,6 +62,81 @@ let pendingImageSrc = null;
 let zoom = 1;
 let zoomMode = "fit";
 const imgCache = new Map();
+const saveStatus = document.getElementById("saveStatus");
+let ready = false;
+let savedSignature = "";
+let observedSignature = "";
+let saveTimer;
+let saving = null;
+let loadGeneration = 0;
+let imageTransition = Promise.resolve();
+let loadingImage = false;
+const imageIds = new WeakMap();
+let nextImageId = 0;
+
+function currentDocument() {
+  return { version: 1, baseDataUrl: image.src, width: canvas.width, height: canvas.height, annotations: cloneAnns(anns) };
+}
+
+function documentSignature() {
+  if (!imageIds.has(image)) imageIds.set(image, ++nextImageId);
+  return JSON.stringify([imageIds.get(image), canvas.width, canvas.height, anns]);
+}
+
+function status(text, error = false) {
+  saveStatus.textContent = text;
+  saveStatus.classList.toggle("save-error", error);
+}
+
+function scheduleSave() {
+  if (!ready) return;
+  const signature = documentSignature();
+  if (signature === observedSignature) return;
+  observedSignature = signature;
+  clearTimeout(saveTimer);
+  status("Saving...");
+  saveTimer = setTimeout(() => { void flushSave().catch(() => {}); }, 180);
+}
+
+async function flushSave() {
+  clearTimeout(saveTimer);
+  await imageTransition;
+  if (saving) return saving;
+  saving = (async () => {
+    while (ready && savedSignature !== documentSignature()) {
+      await imageTransition;
+      const doc = currentDocument();
+      const signature = documentSignature();
+      status("Saving...");
+      const blob = await documentBlob(doc, mimeFor(record.format));
+      const format = blob.type === "image/jpeg" ? "jpeg" : blob.type === "image/webp" ? "webp" : blob.type === "image/avif" ? "avif" : "png";
+      const dataUrl = await blobDataUrl(blob);
+      record = await longshotHistoryUpdate({ ...record, document: doc, dataUrl, format,
+        width: doc.width, height: doc.height, edited: true });
+      savedSignature = signature;
+    }
+    status("Saved on this device");
+  })().catch((error) => {
+    status(`Not saved: ${error?.message || error}`, true);
+    throw error;
+  }).finally(() => { saving = null; });
+  return saving;
+}
+
+async function navigateTo(url) {
+  closeTextEditor(true);
+  try {
+    await flushSave();
+    location.href = url;
+  } catch { /* Keep the unsaved document visible, with an actionable status. */ }
+}
+
+window.addEventListener("beforeunload", (event) => {
+  if (ready && savedSignature !== documentSignature()) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
 
 function uid() {
   return crypto.randomUUID();
@@ -75,7 +152,6 @@ function frame() {
     src: image.src,
     w: canvas.width,
     h: canvas.height,
-    record: record ? { ...record } : null,
   };
 }
 
@@ -86,52 +162,65 @@ function snapshot() {
   syncEditButtons();
 }
 
+function replaceBaseImage(src, apply) {
+  const generation = ++loadGeneration;
+  loadingImage = true;
+  syncEditButtons();
+  imageTransition = new Promise((resolve, reject) => {
+    const next = new Image();
+    next.onload = () => {
+      if (generation !== loadGeneration) { resolve(); return; }
+      image = next;
+      canvas.width = next.naturalWidth;
+      canvas.height = next.naturalHeight;
+      loadingImage = false;
+      apply();
+      render();
+      applyZoomStyles();
+      resolve();
+    };
+    next.onerror = () => {
+      loadingImage = false;
+      syncEditButtons();
+      status("Could not load the edited image. Undo and try again.", true);
+      reject(new Error("Could not load the edited image."));
+    };
+    next.src = src;
+  });
+  void imageTransition.catch(() => {});
+}
+
 function restoreFrame(next) {
   closeTextEditor(false);
-  anns = cloneAnns(next.anns);
   selectedId = null;
   crop = null;
   document.getElementById("applyCrop").hidden = true;
-  if (next.record) record = { ...next.record };
   if (next.src && (image.src !== next.src || canvas.width !== next.w || canvas.height !== next.h)) {
-    const img = new Image();
-    img.onload = () => {
-      image = img;
-      canvas.width = next.w;
-      canvas.height = next.h;
-      if (record) {
-        record.dataUrl = next.src;
-        record.width = next.w;
-        record.height = next.h;
-        chrome.storage.local.set({ longshotCurrent: record });
-      }
-      render();
-      applyZoomStyles();
-    };
-    img.src = next.src;
+    replaceBaseImage(next.src, () => { anns = cloneAnns(next.anns); });
     return;
   }
+  anns = cloneAnns(next.anns);
   render();
   syncEditButtons();
 }
 
 function undo() {
-  if (!undoStack.length) return;
+  if (loadingImage || !undoStack.length) return;
   redoStack.push(frame());
   restoreFrame(undoStack.pop());
   syncEditButtons();
 }
 
 function redo() {
-  if (!redoStack.length) return;
+  if (loadingImage || !redoStack.length) return;
   undoStack.push(frame());
   restoreFrame(redoStack.pop());
   syncEditButtons();
 }
 
 function syncEditButtons() {
-  undoBtn.disabled = undoStack.length === 0;
-  redoBtn.disabled = redoStack.length === 0;
+  undoBtn.disabled = loadingImage || undoStack.length === 0;
+  redoBtn.disabled = loadingImage || redoStack.length === 0;
   clearBtn.disabled = anns.length === 0;
   deleteBtn.hidden = !selectedId;
 }
@@ -151,8 +240,9 @@ function bounds(a) {
   if (a.type === "text") {
     const fontSize = a.fontSize || 28;
     ctx.font = `${fontSize}px sans-serif`;
-    const w = Math.max(40, ctx.measureText(a.text || " ").width);
-    return { x: a.x, y: a.y - fontSize, w, h: fontSize * 1.3 };
+    const lines = String(a.text || " ").split("\n");
+    const w = Math.max(40, ...lines.map((line) => ctx.measureText(line).width));
+    return { x: a.x, y: a.y - fontSize, w, h: fontSize * 1.3 * lines.length };
   }
   if (a.type === "emoji") {
     const s = a.size || 48;
@@ -264,7 +354,7 @@ function layoutTextEditor() {
   textEdit.style.left = `${a.x * zoom}px`;
   textEdit.style.top = `${(a.y - fontSize) * zoom}px`;
   textEdit.style.width = `${Math.max(120, a.w || 280) * zoom}px`;
-  textEdit.style.height = `${fontSize * 3.2 * zoom}px`;
+  textEdit.style.height = `${fontSize * Math.max(3.2, String(a.text || "").split("\n").length * 1.3) * zoom}px`;
   textEdit.style.fontSize = `${fontSize * zoom}px`;
 }
 
@@ -411,86 +501,8 @@ function imageEl(a) {
   return img.complete ? img : null;
 }
 
-function arrowPts(x1, y1, x2, y2, width) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const length = Math.hypot(dx, dy);
-  const shaft = Math.max(1.5, width || 3);
-  if (length < 0.5) {
-    const s = Math.max(6, shaft);
-    return [
-      [x2, y2 - s * 1.2],
-      [x2 + s, y2 + s * 0.7],
-      [x2 - s, y2 + s * 0.7],
-    ];
-  }
-  const ux = dx / length;
-  const uy = dy / length;
-  const px = -uy;
-  const py = ux;
-  const headLen = Math.min(length * 0.5, Math.max(shaft * 4.2, 24));
-  const headHalf = Math.max(shaft * 1.5 + 3, headLen * 0.48);
-  const half = shaft / 2;
-  const neck = Math.max(0, length - headLen);
-  const nx = x1 + ux * neck;
-  const ny = y1 + uy * neck;
-  return [
-    [x1 + px * half, y1 + py * half],
-    [nx + px * half, ny + py * half],
-    [nx + px * headHalf, ny + py * headHalf],
-    [x2, y2],
-    [nx - px * headHalf, ny - py * headHalf],
-    [nx - px * half, ny - py * half],
-    [x1 - px * half, y1 - py * half],
-  ];
-}
-
 function drawAnn(a) {
-  ctx.save();
-  ctx.strokeStyle = a.color;
-  ctx.fillStyle = a.color;
-  ctx.lineWidth = a.w || 3;
-  ctx.lineCap = "round";
-  if (a.type === "pen") {
-    ctx.beginPath();
-    a.pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-    ctx.stroke();
-  } else if (a.type === "rect") {
-    ctx.globalAlpha = 0.2;
-    ctx.fillRect(a.x, a.y, a.bw, a.bh);
-    ctx.globalAlpha = 1;
-    ctx.strokeRect(a.x, a.y, a.bw, a.bh);
-  } else if (a.type === "ellipse") {
-    ctx.beginPath();
-    ctx.ellipse(a.x + a.bw / 2, a.y + a.bh / 2, Math.abs(a.bw / 2), Math.abs(a.bh / 2), 0, 0, Math.PI * 2);
-    ctx.globalAlpha = 0.2;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.stroke();
-  } else if (a.type === "arrow") {
-    const pts = arrowPts(a.x, a.y, a.x + a.bw, a.y + a.bh, a.w || 3);
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0], pts[0][1]);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
-    ctx.closePath();
-    ctx.lineJoin = "miter";
-    ctx.miterLimit = 3;
-    ctx.fill();
-  } else if (a.type === "text") {
-    if (editingTextId === a.id) {
-      ctx.restore();
-      return;
-    }
-    ctx.font = `${a.fontSize || 28}px sans-serif`;
-    ctx.fillText(a.text, a.x, a.y);
-  } else if (a.type === "emoji") {
-    ctx.font = `${a.size || 48}px sans-serif`;
-    ctx.fillText(a.emoji, a.x, a.y + (a.size || 48) * 0.82);
-  } else if (a.type === "image") {
-    const img = imageEl(a);
-    if (img) ctx.drawImage(img, a.x, a.y, a.bw, a.bh);
-  }
-  ctx.restore();
+  drawAnnotation(ctx, a, { image: a.type === "image" ? imageEl(a) : null, editingTextId });
 }
 
 function drawSelection(a) {
@@ -514,6 +526,7 @@ function drawSelection(a) {
 
 function render() {
   if (!image.naturalWidth) return;
+  document.getElementById("meta").textContent = `${canvas.width} \u00d7 ${canvas.height} \u00b7 ${String(record?.format || "png").toUpperCase()}`;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(image, 0, 0);
   for (const a of anns) drawAnn(a);
@@ -544,6 +557,7 @@ function render() {
     }
   }
   syncEditButtons();
+  scheduleSave();
 }
 
 function pos(e) {
@@ -555,7 +569,7 @@ function pos(e) {
 }
 
 canvas.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0) return;
+  if (!ready || loadingImage || e.button !== 0) return;
   canvas.setPointerCapture(e.pointerId);
   const p = pos(e);
   if (tool !== "emoji") emojiPicker.hidden = true;
@@ -587,7 +601,7 @@ canvas.addEventListener("pointerdown", (e) => {
     }
     const hit = [...anns].reverse().find((a) => hitAnn(a, p));
     selectedId = hit ? hit.id : null;
-    if (hit?.type === "text") openTextEditor(hit, true);
+    if (hit?.type === "text") { snapshot(); openTextEditor(hit, true); }
     if (hit) {
       drag = { mode: "move", id: hit.id, last: p, snapped: false };
     }
@@ -758,36 +772,26 @@ fileInput.addEventListener("change", () => {
 });
 
 document.getElementById("applyCrop").addEventListener("click", function applyCrop() {
-  const b = normCrop(crop);
-  if (!b || b.w < 8 || b.h < 8) return;
+  const requested = normCrop(crop);
+  if (!requested) return;
+  const x = Math.max(0, requested.x), y = Math.max(0, requested.y);
+  const b = { x, y, w: Math.min(canvas.width, requested.x + requested.w) - x,
+    h: Math.min(canvas.height, requested.y + requested.h) - y };
+  if (b.w < 8 || b.h < 8) return;
+  if (loadingImage) return;
   snapshot();
   const next = document.createElement("canvas");
   next.width = Math.max(1, Math.round(b.w));
   next.height = Math.max(1, Math.round(b.h));
   next.getContext("2d").drawImage(image, b.x, b.y, b.w, b.h, 0, 0, next.width, next.height);
   const dataUrl = next.toDataURL();
-  const cropped = new Image();
-  cropped.onload = function onCropLoaded() {
-    image = cropped;
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
+  replaceBaseImage(dataUrl, () => {
     anns = anns.map((a) => moveAnn(a, -b.x, -b.y));
     crop = null;
     selectedId = null;
     document.getElementById("applyCrop").hidden = true;
-    render();
-    applyZoomStyles();
-  };
-  cropped.src = dataUrl;
-  if (record) {
-    record.dataUrl = dataUrl;
-    record.width = next.width;
-    record.height = next.height;
-    record.edited = true;
-    record.byteSize = typeof longshotByteSize === "function" ? longshotByteSize(dataUrl) : record.byteSize;
-    chrome.storage.local.set({ longshotCurrent: record });
-    if (typeof longshotPushHistory === "function") longshotPushHistory(record);
-  }
+  });
+
 });
 
 canvas.addEventListener("contextmenu", (e) => {
@@ -814,6 +818,8 @@ textEdit.addEventListener("pointerdown", (e) => e.stopPropagation());
 textEdit.addEventListener("input", () => {
   if (!editingTextId) return;
   anns = anns.map((a) => (a.id === editingTextId ? { ...a, text: textEdit.value } : a));
+  layoutTextEditor();
+  scheduleSave();
 });
 textEdit.addEventListener("blur", () => closeTextEditor(true));
 textEdit.addEventListener("keydown", (e) => {
@@ -868,16 +874,10 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-function baked() {
-  const c = document.createElement("canvas");
-  c.width = canvas.width;
-  c.height = canvas.height;
-  c.getContext("2d").drawImage(canvas, 0, 0);
-  return c;
-}
-
 async function toBlob(type, quality) {
-  return await new Promise((resolve) => baked().toBlob(resolve, type, quality));
+  await imageTransition;
+  closeTextEditor(true);
+  return documentBlob(currentDocument(), type, quality);
 }
 
 function mimeFor(format) {
@@ -887,26 +887,36 @@ function mimeFor(format) {
   return "image/png";
 }
 
-document.getElementById("copy").addEventListener("click", async () => {
+addExportAction("copy", async () => {
   const blob = await toBlob("image/png");
   await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
 });
-document.getElementById("download").addEventListener("click", async () => {
-  const format = record?.format || "png";
-  const mime = mimeFor(format);
-  const blob = await toBlob(mime, 0.92);
-  const dataUrl = await blobToUrl(blob);
-  chrome.runtime.sendMessage({ type: "LONGSHOT_EXPORT", kind: "image", dataUrl, format });
+addExportAction("download", async () => {
+  let format = record?.format || "png";
+  const blob = await toBlob(mimeFor(format), 0.92);
+  // toBlob falls back to PNG for types it cannot encode; name the file to match.
+  if (blob.type !== mimeFor(format)) format = "png";
+  await runExport(blob, format, "image");
 });
-document.getElementById("pdf").addEventListener("click", async () => {
+addExportAction("pdf", async () => {
   const blob = await toBlob("image/jpeg", 0.92);
   const buf = await blob.arrayBuffer();
   const pdf = jpegToPdfBlob(new Uint8Array(buf), canvas.width, canvas.height, record?.title || "Capture");
-  const dataUrl = await blobToUrl(pdf);
-  chrome.runtime.sendMessage({ type: "LONGSHOT_EXPORT", kind: "pdf", dataUrl });
+  await runExport(pdf, "jpeg", "pdf");
 });
+
+function addExportAction(id, action) {
+  document.getElementById(id).addEventListener("click", () => {
+    void action().catch((error) => status("Could not export: " + (error?.message || error), true));
+  });
+}
+
+async function runExport(blob, format, kind) {
+  await exportCapture(blob,
+    { ...(record || {}), format, width: canvas.width, height: canvas.height, createdAt: record?.createdAt || Date.now() }, kind);
+}
 document.getElementById("settings").addEventListener("click", () => {
-  location.href = chrome.runtime.getURL("options.html");
+  void navigateTo(chrome.runtime.getURL("options.html"));
 });
 
 const feedbackPanel = document.getElementById("feedbackPanel");
@@ -918,6 +928,7 @@ function hidePanels() {
 }
 
 function loadRecord(next) {
+  ready = false;
   record = next;
   document.getElementById("title").textContent = record.title;
   document.getElementById("meta").textContent = `${record.width} × ${record.height} · ${String(record.format).toUpperCase()}`;
@@ -925,18 +936,22 @@ function loadRecord(next) {
   image.onload = () => {
     canvas.width = image.naturalWidth;
     canvas.height = image.naturalHeight;
-    anns = [];
+    anns = cloneAnns(record.document?.annotations || []);
     crop = null;
     drawing = null;
     selectedId = null;
     undoStack = [];
     redoStack = [];
     document.getElementById("applyCrop").hidden = true;
+    savedSignature = observedSignature = documentSignature();
+    ready = true;
+    status("Saved on this device");
     render();
     zoomToFit();
   };
-  image.src = record.dataUrl;
-  chrome.storage.local.set({ longshotCurrent: record });
+  image.onerror = () => status("Could not load this capture.", true);
+  image.src = record.document?.baseDataUrl || record.dataUrl;
+  history.replaceState(null, "", "editor.html?id=" + encodeURIComponent(record.id));
 }
 
 document.getElementById("feedback").addEventListener("click", (e) => {
@@ -956,9 +971,11 @@ document.getElementById("feedbackSubmit").addEventListener("click", async () => 
   feedbackStatus.textContent = "Sending…";
   try {
     const result = await sendLongshotFeedback(text);
-    feedbackBody.value = "";
-    feedbackStatus.textContent = result.delivered ? "Sent. Thank you." : "Could not send feedback. Try again in a moment.";
-    setTimeout(hidePanels, 1200);
+    feedbackStatus.textContent = result.delivered ? "Sent. Thank you." : "Could not send feedback. Your message is still here; try again.";
+    if (result.delivered) {
+      feedbackBody.value = "";
+      setTimeout(hidePanels, 1200);
+    }
   } catch {
     feedbackStatus.textContent = "Could not send feedback. Try again in a moment.";
   }
@@ -975,14 +992,6 @@ menu.addEventListener("click", (e) => {
   if (act === "download") document.getElementById("download").click();
   if (act === "pdf") document.getElementById("pdf").click();
 });
-
-function blobToUrl(blob) {
-  return new Promise((resolve) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.readAsDataURL(blob);
-  });
-}
 
 zoomOutBtn.addEventListener("click", () => setZoom(stepZoom(zoom, -ZOOM_STEP)));
 zoomInBtn.addEventListener("click", () => setZoom(stepZoom(zoom, ZOOM_STEP)));
@@ -1007,20 +1016,20 @@ window.addEventListener("resize", () => {
 applyZoomStyles();
 syncEditButtons();
 
+document.querySelector('a[href="files.html"]').addEventListener("click", (event) => {
+  event.preventDefault();
+  void navigateTo("files.html");
+});
+
 (async () => {
   const id = new URLSearchParams(location.search).get("id");
-  if (id) {
-    const found = await longshotHistoryGet(id);
-    if (found) {
-      loadRecord(found);
-      return;
-    }
+  const current = id ? null : (await chrome.storage.local.get("longshotCurrent")).longshotCurrent;
+  const found = await longshotHistoryGet(id || current?.id || "");
+  if (found) loadRecord(found);
+  else {
+    document.getElementById("title").textContent = "No capture";
+    status(id ? "This capture is no longer in Files." : "Capture a page to start editing.");
+    document.querySelectorAll("header button, nav button").forEach((button) => { button.disabled = true; });
+    document.getElementById("settings").disabled = false;
   }
-  chrome.storage.local.get("longshotCurrent", ({ longshotCurrent }) => {
-    if (!longshotCurrent) {
-      document.getElementById("title").textContent = "No capture";
-      return;
-    }
-    loadRecord(longshotCurrent);
-  });
-})();
+})().catch((error) => status(error.message || "Could not load captures.", true));

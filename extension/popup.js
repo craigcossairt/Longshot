@@ -1,3 +1,5 @@
+import { longshotHistoryGet } from "./history.js";
+
 const status = document.getElementById("status");
 const fullBtn = document.getElementById("full");
 const visibleBtn = document.getElementById("visible");
@@ -44,6 +46,20 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
+// The capture tab could not take the clipboard write; the popup still has focus.
+async function copyFromHistory(id) {
+  const item = await longshotHistoryGet(id);
+  if (!item) throw new Error("Capture not found");
+  let blob = await (await fetch(item.dataUrl)).blob();
+  if (blob.type !== "image/png") {
+    const bmp = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bmp.width, bmp.height);
+    canvas.getContext("2d").drawImage(bmp, 0, 0);
+    blob = await canvas.convertToBlob({ type: "image/png" });
+  }
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+}
+
 function run(mode) {
   const selecting = mode === "region";
   setProgress(0, 1, selecting ? "Select an area on the page" : "Capturing");
@@ -58,6 +74,18 @@ function run(mode) {
     if (!res?.ok) {
       progressFill.style.width = "0%";
       status.textContent = friendlyStatus(res?.error || "Capture failed");
+      return;
+    }
+    if (res.copyId) {
+      copyFromHistory(res.copyId)
+        .then(() => {
+          setProgress(1, 1, "Copied");
+          setTimeout(() => window.close(), 600);
+        })
+        .catch(() => {
+          chrome.tabs.create({ url: chrome.runtime.getURL("editor.html") });
+          window.close();
+        });
       return;
     }
     setProgress(1, 1, "Opening editor");

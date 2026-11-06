@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 
 export const REGION_GRID = 8;
@@ -77,53 +78,59 @@ export function compareVerdict(current, baseline) {
   return { divergesFromBaseline: reasons.length > 0, reasons };
 }
 
-export function compareToBaseline(current, rawText) {
+export function parseBaseline(rawText) {
   let baseline;
   try {
     baseline = JSON.parse(rawText);
   } catch {
-    return { divergesFromBaseline: true, reasons: ["baseline unreadable: invalid JSON"] };
+    return { error: "baseline unreadable: invalid JSON" };
   }
-  if (baseline === null || typeof baseline !== "object" || Array.isArray(baseline)) {
-    return { divergesFromBaseline: true, reasons: ["baseline unreadable: not a verdict object"] };
+  if (!baseline || typeof baseline !== "object" || Array.isArray(baseline) ||
+      !Number.isInteger(baseline.width) || baseline.width <= 0 ||
+      !Number.isInteger(baseline.height) || baseline.height <= 0 ||
+      !Number.isInteger(baseline.tiles) || baseline.tiles <= 0 ||
+      typeof baseline.format !== "string" || typeof baseline.engine !== "string" ||
+      baseline.grid !== REGION_GRID || !Array.isArray(baseline.regions) ||
+      baseline.regions.length !== REGION_GRID * REGION_GRID ||
+      baseline.regions.some((region) => typeof region !== "string" || !region)) {
+    return { error: "baseline unreadable: not a complete verdict object" };
   }
-  if (!("width" in baseline) && !("regions" in baseline) && !("sha256" in baseline)) {
-    return { divergesFromBaseline: true, reasons: ["baseline unreadable: not a verdict object"] };
+  return { baseline };
+}
+
+export function readBaselineFile(path) {
+  if (!existsSync(path)) return { error: `baseline missing: ${path}` };
+  try {
+    return parseBaseline(readFileSync(path, "utf8"));
+  } catch (error) {
+    return { error: `baseline unreadable: ${error.message}` };
   }
-  return compareVerdict(current, baseline);
+}
+
+export function compareToBaseline(current, rawText) {
+  const parsed = parseBaseline(rawText);
+  return parsed.error
+    ? { divergesFromBaseline: true, reasons: [parsed.error] }
+    : compareVerdict(current, parsed.baseline);
 }
 
 export function compareToBaselineFile(current, path) {
-  if (!existsSync(path)) {
-    return { divergesFromBaseline: true, reasons: [`baseline missing: ${path}`] };
-  }
-  let raw;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch (error) {
-    return { divergesFromBaseline: true, reasons: [`baseline unreadable: ${error.message}`] };
-  }
-  return compareToBaseline(current, raw);
+  const parsed = readBaselineFile(path);
+  return parsed.error
+    ? { divergesFromBaseline: true, reasons: [parsed.error] }
+    : compareVerdict(current, parsed.baseline);
 }
 
-export function regionHashesFromRgba(rgba, width, height, grid = REGION_GRID) {
-  const hashes = [];
-  const cellW = Math.max(1, Math.floor(width / grid));
-  const cellH = Math.max(1, Math.floor(height / grid));
-  for (let gy = 0; gy < grid; gy++) {
-    for (let gx = 0; gx < grid; gx++) {
-      const x0 = gx * cellW;
-      const y0 = gy * cellH;
-      const x1 = gx === grid - 1 ? width : x0 + cellW;
-      const y1 = gy === grid - 1 ? height : y0 + cellH;
-      const hash = createHash("sha256");
-      for (let y = y0; y < y1; y++) {
-        const start = (y * width + x0) * 4;
-        const end = (y * width + x1) * 4;
-        hash.update(rgba.subarray(start, end));
-      }
-      hashes.push(hash.digest("hex").slice(0, 16));
-    }
+export function assertBaselineSafeOutput(imagePath, baselinePath) {
+  if (!baselinePath) return;
+  const canonical = (path) => {
+    const resolved = existsSync(path) ? realpathSync(path) : resolve(path);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  const baseline = canonical(baselinePath);
+  if ([imagePath, verdictPath(imagePath)].some((path) => canonical(path) === baseline)) {
+    const error = new Error("Output would overwrite --baseline; choose a different --out path");
+    error.code = 2;
+    throw error;
   }
-  return hashes;
 }

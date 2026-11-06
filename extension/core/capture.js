@@ -42,15 +42,16 @@ export async function runTiledCapture({
           const lastTile = x === xs[xs.length - 1] && y === ys[ys.length - 1];
           // A sticky footer is in the first viewport too. Leaving it there stamps
           // it over the content it covered, and the last tile still has the real one.
+          let preserved;
           if (!(index === 1 && lastTile)) {
-            await hideChrome({ top: index > 1, bottom: !lastTile });
+            preserved = await hideChrome({ top: index > 1, bottom: !lastTile });
             await delay(delays.afterHide);
           }
           const ax = Math.round(pos?.x ?? x);
           const ay = Math.round(pos?.y ?? y);
           if (shots.some((shot) => shot.x === ax && shot.y === ay)) continue;
           const dataUrl = await captureTile();
-          shots.push({ x: ax, y: ay, dataUrl });
+          shots.push({ x: ax, y: ay, dataUrl, ...(preserved?.bottomRects?.length ? { bottomRects: preserved.bottomRects } : {}) });
         } else {
           const dataUrl = await captureTile();
           shots.push({ x: 0, y: 0, dataUrl });

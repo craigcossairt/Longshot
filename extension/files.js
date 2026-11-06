@@ -3,7 +3,9 @@ import {
   longshotFormatBytes,
   longshotHistoryDelete,
   longshotHistoryGetAll,
+  longshotHistoryGet,
 } from "./history.js";
+import { exportCapture } from "./export.js";
 
 const rows = document.getElementById("rows");
 const empty = document.getElementById("empty");
@@ -14,6 +16,7 @@ const deleteBtn = document.getElementById("deleteBtn");
 
 let items = [];
 const selected = new Set();
+count.setAttribute("role", "status");
 
 function isHttp(url) {
   return /^https?:/i.test(url || "");
@@ -113,30 +116,37 @@ selectAll.addEventListener("change", () => {
 
 downloadBtn.addEventListener("click", async () => {
   const chosen = items.filter((item) => selected.has(item.id));
-  for (const item of chosen) {
-    chrome.runtime.sendMessage({
-      type: "LONGSHOT_EXPORT",
-      kind: "image",
-      dataUrl: item.dataUrl,
-      format: item.format,
-      title: item.title,
-      url: item.url,
-      createdAt: item.createdAt,
-      width: item.width,
-      height: item.height,
-    });
+  const failed = [];
+  for (const chosenItem of chosen) {
+    try {
+      const item = await longshotHistoryGet(chosenItem.id);
+      if (!item) throw new Error("This capture was deleted in another tab.");
+      const blob = await (await fetch(item.dataUrl)).blob();
+      const format = blob.type === "image/jpeg" ? "jpeg" : blob.type === "image/webp" ? "webp" : blob.type === "image/avif" ? "avif" : "png";
+      await exportCapture(blob, { ...item, format }, "image");
+    } catch (error) {
+      failed.push(`${chosenItem.title || "Capture"}: ${error?.message || error}`);
+    }
   }
+  if (failed.length) alert(`Could not download:\n${failed.join("\n")}`);
 });
 
 deleteBtn.addEventListener("click", async () => {
   const ids = [...selected];
-  await longshotHistoryDelete(ids);
-  items = items.filter((item) => !selected.has(item.id));
-  selected.clear();
-  render();
+  try {
+    await longshotHistoryDelete(ids);
+    ids.forEach((id) => selected.delete(id));
+    await refresh();
+  } catch (error) { count.textContent = `Could not delete: ${error.message}`; }
 });
 
-longshotHistoryGetAll().then((list) => {
-  items = list;
+async function refresh() {
+  items = await longshotHistoryGetAll();
+  const ids = new Set(items.map((item) => item.id));
+  for (const id of selected) if (!ids.has(id)) selected.delete(id);
   render();
+}
+window.addEventListener("focus", () => {
+  void refresh().catch((error) => { count.textContent = `Could not load captures: ${error.message}`; });
 });
+void refresh().catch((error) => { count.textContent = `Could not load captures: ${error.message}`; });

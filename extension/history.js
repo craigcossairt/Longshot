@@ -1,114 +1,149 @@
 const LONGSHOT_HISTORY_DB = "longshot-history";
-const LONGSHOT_HISTORY_STORE = "items";
+const STORE = "captures";
+const DELETED = "deleted";
 const LONGSHOT_HISTORY_MAX = 50;
 
-function longshotByteSize(dataUrl) {
+export function longshotByteSize(dataUrl) {
   if (!dataUrl) return 0;
-  const comma = String(dataUrl).indexOf(",");
-  const b64 = comma >= 0 ? String(dataUrl).slice(comma + 1) : String(dataUrl);
-  return Math.round(b64.length * 0.75);
+  const b64 = String(dataUrl).split(",").at(-1);
+  return Math.max(0, Math.floor(b64.length * 0.75) - (b64.match(/=+$/)?.[0].length || 0));
 }
 
-function longshotFormatBytes(bytes) {
+export function longshotFormatBytes(bytes) {
   if (!bytes) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function longshotHistoryDb() {
+function openDb() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(LONGSHOT_HISTORY_DB, 1);
+    let blocked = false;
+    const req = indexedDB.open(LONGSHOT_HISTORY_DB, 2);
     req.onupgradeneeded = () => {
-      req.result.createObjectStore(LONGSHOT_HISTORY_STORE);
+      const db = req.result;
+      const captures = db.createObjectStore(STORE, { keyPath: "id" });
+      captures.createIndex("updatedAt", "updatedAt");
+      db.createObjectStore(DELETED);
+      if (db.objectStoreNames.contains("items")) {
+        const legacy = req.transaction.objectStore("items").get("list");
+        legacy.onsuccess = () => {
+          const items = Array.isArray(legacy.result) ? legacy.result : [];
+          // Migration and removal commit together; a failed upgrade preserves v1.
+          for (const [i, item] of items.entries()) {
+            captures.put({ ...item, id: item.id || crypto.randomUUID(), revision: 1,
+              updatedAt: item.updatedAt || item.createdAt || Date.now() - i });
+          }
+          db.deleteObjectStore("items");
+        };
+      }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      if (blocked) { req.result.close(); return; }
+      req.result.onversionchange = () => req.result.close();
+      resolve(req.result);
+    };
     req.onerror = () => reject(req.error);
+    req.onblocked = () => {
+      blocked = true;
+      reject(new Error("Close other Longshot tabs to update saved captures."));
+    };
   });
 }
 
-async function longshotHistoryGetAll() {
-  const db = await longshotHistoryDb();
+async function transaction(mode, run) {
+  const db = await openDb();
   try {
     return await new Promise((resolve, reject) => {
-      const req = db.transaction(LONGSHOT_HISTORY_STORE, "readonly").objectStore(LONGSHOT_HISTORY_STORE).get("list");
-      req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
-      req.onerror = () => reject(req.error);
+      const tx = db.transaction([STORE, DELETED], mode);
+      let result;
+      let failure;
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(failure || tx.error || new Error("Could not save captures."));
+      tx.onerror = () => { /* onabort owns rejection */ };
+      run(tx.objectStore(STORE), tx.objectStore(DELETED), (value) => { result = value; }, (error) => {
+        failure = error;
+        tx.abort();
+      });
     });
   } finally {
     db.close();
   }
 }
 
-async function longshotHistorySetAll(items) {
-  const db = await longshotHistoryDb();
-  try {
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(LONGSHOT_HISTORY_STORE, "readwrite");
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      tx.objectStore(LONGSHOT_HISTORY_STORE).put(items, "list");
-    });
-  } finally {
-    db.close();
-  }
+export async function longshotHistoryGetAll() {
+  return transaction("readonly", (captures, _deleted, done) => {
+    captures.getAll().onsuccess = (e) => done(e.target.result.sort((a, b) => b.updatedAt - a.updatedAt));
+  });
 }
 
-async function longshotMakeThumb(dataUrl) {
+export async function longshotHistoryGet(id) {
+  return transaction("readonly", (captures, _deleted, done) => {
+    captures.get(id).onsuccess = (e) => done(e.target.result || null);
+  });
+}
+
+async function makeThumb(dataUrl) {
+  let bmp;
   try {
-    const blob = await (await fetch(dataUrl)).blob();
-    const bmp = await createImageBitmap(blob);
+    bmp = await createImageBitmap(await (await fetch(dataUrl)).blob());
     const w = 144;
-    const h = Math.max(1, Math.round((bmp.height / Math.max(1, bmp.width)) * w));
+    const h = Math.max(1, Math.round(bmp.height / Math.max(1, bmp.width) * w));
     const canvas = new OffscreenCanvas(w, Math.min(h, 260));
     canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
-    const out = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.72 });
+    const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.72 });
     return await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(out);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
     });
   } catch {
     return dataUrl;
+  } finally {
+    bmp?.close();
   }
 }
 
-async function longshotPushHistory(record) {
-  const item = {
-    ...record,
-    id: record.id || crypto.randomUUID(),
-    thumbUrl: record.thumbUrl || (await longshotMakeThumb(record.dataUrl)),
-    byteSize: record.byteSize || longshotByteSize(record.dataUrl),
-  };
-  let items = [item, ...(await longshotHistoryGetAll()).filter((entry) => entry.id !== item.id)].slice(
-    0,
-    LONGSHOT_HISTORY_MAX,
-  );
-  try {
-    await longshotHistorySetAll(items);
-  } catch {
-    items = items.slice(0, Math.max(1, items.length - 2));
-    await longshotHistorySetAll(items);
-  }
-  return item;
+async function writeRecord(record, updateOnly) {
+  const item = { ...record, id: record.id || crypto.randomUUID(),
+    thumbUrl: await makeThumb(record.dataUrl), byteSize: longshotByteSize(record.dataUrl) };
+  return transaction("readwrite", (captures, deleted, done, fail) => {
+    deleted.get(item.id).onsuccess = (tombstone) => {
+      if (tombstone.target.result) return fail(new Error("This capture was deleted. Your open copy has not been saved."));
+      captures.get(item.id).onsuccess = (event) => {
+        const previous = event.target.result;
+        if (updateOnly && !previous) return fail(new Error("This capture is no longer in Files."));
+        if (previous && record.revision !== previous.revision) {
+          return fail(new Error("This capture changed in another tab. Reopen it before editing."));
+        }
+        item.revision = (previous?.revision || 0) + 1;
+        item.updatedAt = Date.now();
+        captures.put(item);
+        let count = 0;
+        captures.index("updatedAt").openCursor(null, "prev").onsuccess = (e) => {
+          const cursor = e.target.result;
+          if (!cursor) return;
+          if (++count > LONGSHOT_HISTORY_MAX) {
+            deleted.put(true, cursor.primaryKey);
+            cursor.delete();
+          }
+          cursor.continue();
+        };
+        done(item);
+      };
+    };
+  });
 }
 
-async function longshotHistoryDelete(ids) {
-  const drop = new Set(ids);
-  const items = (await longshotHistoryGetAll()).filter((item) => !drop.has(item.id));
-  await longshotHistorySetAll(items);
-}
+export function longshotPushHistory(record) { return writeRecord(record, false); }
+export function longshotHistoryUpdate(record) { return writeRecord(record, true); }
 
-async function longshotHistoryGet(id) {
-  return (await longshotHistoryGetAll()).find((item) => item.id === id) || null;
+export async function longshotHistoryDelete(ids) {
+  await transaction("readwrite", (captures, deleted) => {
+    for (const id of ids) {
+      captures.delete(id);
+      deleted.put(true, id);
+    }
+  });
 }
-
-export {
-  longshotByteSize,
-  longshotFormatBytes,
-  longshotHistoryDelete,
-  longshotHistoryGet,
-  longshotHistoryGetAll,
-  longshotPushHistory,
-};

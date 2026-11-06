@@ -68,6 +68,13 @@ describe("compareToBaseline", () => {
     assert.ok(cmp.reasons.some((r) => /baseline missing/.test(r)));
   });
 
+  it("rejects incomplete region data rather than comparing only matching metadata", () => {
+    const incomplete = { ...verdict(), regions: [] };
+    const cmp = compareToBaseline(verdict(), JSON.stringify(incomplete));
+    assert.equal(cmp.divergesFromBaseline, true);
+    assert.match(cmp.reasons[0], /not a complete verdict/);
+  });
+
   it("treats a malformed object as divergence", () => {
     const cmp = compareToBaseline(verdict(), "[]");
     assert.equal(cmp.divergesFromBaseline, true);

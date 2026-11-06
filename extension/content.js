@@ -2,6 +2,8 @@
   const restores = [];
   const chromeRestores = [];
   const hiddenEls = new WeakSet();
+  let cancelSelection;
+  let scrollGeneration = 0;
 
   function pushRestore(fn) {
     restores.push(fn);
@@ -208,6 +210,7 @@
   }
 
   async function scrollToPos(x, y) {
+    const generation = scrollGeneration;
     const root = document.scrollingElement || document.documentElement;
     const maxX = Math.max(0, root.scrollWidth - window.innerWidth);
     const maxY = Math.max(0, root.scrollHeight - window.innerHeight);
@@ -216,6 +219,7 @@
     for (let i = 0; i < 6; i++) {
       scrollInstant(tx, ty);
       await waitFrames(2);
+      if (generation !== scrollGeneration) break;
       if (Math.abs(window.scrollX - tx) < 1 && Math.abs(window.scrollY - ty) < 1) break;
     }
     return { x: window.scrollX, y: window.scrollY };
@@ -259,6 +263,7 @@
       function cleanup(result) {
         if (done) return;
         done = true;
+        cancelSelection = null;
         window.removeEventListener("keydown", onKey, true);
         host.remove();
         resolve(result);
@@ -310,6 +315,7 @@
           devicePixelRatio: window.devicePixelRatio || 1,
         });
       });
+      cancelSelection = () => cleanup(null);
       window.addEventListener("keydown", onKey, true);
       document.documentElement.appendChild(host);
     });
@@ -317,6 +323,11 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === "LONGSHOT_PING") {
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg.type === "LONGSHOT_CANCEL_REGION") {
+      cancelSelection?.();
       sendResponse({ ok: true });
       return;
     }
@@ -337,9 +348,9 @@
     }
     if (msg.type === "LONGSHOT_HIDE_CHROME") {
       resetChrome();
-      if (globalThis.__longshotHide) globalThis.__longshotHide.hide(msg);
-      else hideFloating(document, msg);
-      sendResponse({ ok: true });
+      const preserved = globalThis.__longshotHide?.hide(msg);
+      if (!globalThis.__longshotHide) hideFloating(document, msg);
+      sendResponse({ ok: true, ...preserved });
       return;
     }
     if (msg.type === "LONGSHOT_SCROLL") {
@@ -351,8 +362,10 @@
       return true;
     }
     if (msg.type === "LONGSHOT_RESET") {
+      scrollGeneration += 1;
+      cancelSelection?.();
       if (globalThis.__longshotOverflow?.active()) globalThis.__longshotOverflow.reset();
-      else scrollInstant(msg.x, msg.y);
+      else if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) scrollInstant(msg.x, msg.y);
       if (globalThis.__longshotHide) globalThis.__longshotHide.reset();
       resetChrome();
       while (restores.length) restores.pop()();

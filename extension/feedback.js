@@ -5,7 +5,6 @@ async function sendLongshotFeedback(message) {
   const endpoints = [
     "https://longshot-cossairt.vercel.app/api/feedback",
     "https://longshot-seven.vercel.app/api/feedback",
-    "http://127.0.0.1:8080/api/feedback",
   ];
   let delivered = false;
   for (const url of endpoints) {

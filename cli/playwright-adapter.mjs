@@ -1,8 +1,9 @@
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { chromium } from "playwright";
-import { REGION_GRID, sha256 } from "./verdict.mjs";
+import { REGION_GRID, assertBaselineSafeOutput, sha256 } from "./verdict.mjs";
 import {
+  CANVAS_MAX_SIDE,
   CAPTURE_DELAYS,
   DEFAULTS,
   HIDE_POLICY,
@@ -12,6 +13,7 @@ import {
   fitFileSize,
   installHideSession,
   jpegToPdfBlob,
+  limitScale,
   mimeFor,
   runTiledCapture,
   uniquePath,
@@ -48,6 +50,12 @@ function asUint8(value) {
   return new Uint8Array(value);
 }
 
+// convertToBlob falls back to PNG for types it cannot encode instead of throwing.
+function encodedResult(raw, mime) {
+  if (raw.type !== mime) throw new Error(`This browser cannot encode ${mime}`);
+  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+}
+
 async function withBrowser(options, fn) {
   let browser;
   try {
@@ -71,11 +79,12 @@ async function withBrowser(options, fn) {
   try {
     return await fn(browser);
   } finally {
-    if (!options.cdp) await browser.close().catch(() => {});
+    // For connectOverCDP, close releases the connection; the external browser stays open.
+    await browser.close().catch(() => {});
   }
 }
 
-async function preparePage(browser, options) {
+async function openPage(browser, options) {
   const context = options.cdp
     ? browser.contexts()[0] || (await browser.newContext())
     : await browser.newContext({
@@ -83,10 +92,20 @@ async function preparePage(browser, options) {
         deviceScaleFactor: options.viewport.scale,
         bypassCSP: true,
       });
-  const page = options.cdp ? context.pages()[0] || (await context.newPage()) : await context.newPage();
-  if (options.cdp) {
-    await page.setViewportSize({ width: options.viewport.width, height: options.viewport.height });
+  // Over --cdp, open a fresh tab rather than navigating one the user already has open.
+  const page = await context.newPage();
+  try {
+    if (options.cdp) {
+      await page.setViewportSize({ width: options.viewport.width, height: options.viewport.height });
+    }
+    return page;
+  } catch (error) {
+    await page.close().catch(() => {});
+    throw error;
   }
+}
+
+async function preparePage(page, options) {
   progress(`Opening ${options.url}`);
   await page.goto(options.url, { waitUntil: "domcontentloaded", timeout: 60000 });
   if (options.wait) {
@@ -94,10 +113,19 @@ async function preparePage(browser, options) {
     if (Number.isFinite(ms)) await page.waitForTimeout(ms);
     else await page.waitForSelector(options.wait, { timeout: 60000 });
   }
-  await page.addStyleTag({ content: CAPTURE_CSS });
+  // Inspector styles work with strict page CSP without disabling that CSP.
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("DOM.enable");
+    await session.send("CSS.enable");
+    const { frameTree } = await session.send("Page.getFrameTree");
+    const { styleSheetId } = await session.send("CSS.createStyleSheet", { frameId: frameTree.frame.id });
+    await session.send("CSS.setStyleSheetText", { styleSheetId, text: CAPTURE_CSS });
+  } finally {
+    await session.detach();
+  }
   await page.evaluate(installHideSession, HIDE_POLICY);
   await page.evaluate(bindOverflowCapture, OVERFLOW_POLICY);
-  return { context, page };
 }
 
 async function measure(page) {
@@ -127,74 +155,92 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings, place 
   const payload = shots.map((shot) => ({
     x: shot.x,
     y: shot.y,
+    bottomRects: shot.bottomRects || [],
     bytes: dataUrlToBytes(shot.dataUrl),
   }));
+  const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
+  const outputW = place ? place.width : fullW * dpr;
+  const outputH = place ? place.height + Math.max(0, fullH * dpr - place.crop.h * dpr) : fullH * dpr;
   const raw = await page.evaluate(
-    async ({ shots, geom, settings, mime, quality, place }) => {
+    async ({ shots, geom, mime, quality, place }) => {
+      // Scale before allocating, including the surrounding viewport of a modal.
+      const k = geom.dpr * geom.scale;
       const canvas = new OffscreenCanvas(
-        Math.max(1, Math.round(geom.fullW * geom.dpr)),
-        Math.max(1, Math.round(geom.fullH * geom.dpr)),
+        Math.max(1, Math.round(geom.fullW * k)),
+        Math.max(1, Math.round(geom.fullH * k)),
       );
       const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
       for (let i = shots.length - 1; i >= 0; i--) {
         const shot = shots[i];
         const bmp = await createImageBitmap(new Blob([shot.bytes], { type: "image/png" }));
-        ctx.drawImage(bmp, Math.round(shot.x * geom.dpr), Math.round(shot.y * geom.dpr));
+        const x0 = Math.round(shot.x * k);
+        const y0 = Math.round(shot.y * k);
+        const x1 = Math.round((shot.x * geom.dpr + bmp.width) * geom.scale);
+        const y1 = Math.round((shot.y * geom.dpr + bmp.height) * geom.scale);
+        ctx.drawImage(bmp, x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+        bmp.close();
+      }
+      // The last tile's footer must paint over the preceding tile's overlap.
+      for (const shot of shots) {
+        if (!shot.bottomRects.length) continue;
+        const bmp = await createImageBitmap(new Blob([shot.bytes], { type: "image/png" }));
+        for (const rect of shot.bottomRects) {
+          const sx = Math.max(0, Math.round(rect.x * geom.dpr));
+          const sy = Math.max(0, Math.round(rect.y * geom.dpr));
+          const right = Math.min(bmp.width, Math.round((rect.x + rect.w) * geom.dpr));
+          const bottom = Math.min(bmp.height, Math.round((rect.y + rect.h) * geom.dpr));
+          if (right <= sx || bottom <= sy) continue;
+          const x0 = Math.round((shot.x * geom.dpr + sx) * geom.scale);
+          const y0 = Math.round((shot.y * geom.dpr + sy) * geom.scale);
+          const x1 = Math.round((shot.x * geom.dpr + right) * geom.scale);
+          const y1 = Math.round((shot.y * geom.dpr + bottom) * geom.scale);
+          if (x1 > x0 && y1 > y0) ctx.drawImage(bmp, sx, sy, right - sx, bottom - sy,
+            x0, y0, x1 - x0, y1 - y0);
+        }
+        bmp.close();
       }
       let out = canvas;
       if (place?.base && place.crop) {
         const baseBmp = await createImageBitmap(new Blob([place.base], { type: "image/png" }));
-        const scale = place.dpr || 1;
-        const extra = Math.max(0, canvas.height - Math.round(place.crop.h * scale));
-        const merged = new OffscreenCanvas(baseBmp.width, baseBmp.height + extra);
+        const baseW = Math.max(1, Math.round(baseBmp.width * geom.scale));
+        const baseH = Math.max(1, Math.round(baseBmp.height * geom.scale));
+        const extra = Math.max(0, canvas.height - Math.round(place.crop.h * k));
+        const merged = new OffscreenCanvas(baseW, baseH + extra);
         const mctx = merged.getContext("2d");
-        mctx.drawImage(baseBmp, 0, 0);
+        mctx.drawImage(baseBmp, 0, 0, baseW, baseH);
         if (extra > 0) {
-          const cut = Math.min(baseBmp.height, Math.max(0, Math.round((place.crop.y + place.crop.h) * scale)));
-          const sampleY = Math.max(0, Math.min(baseBmp.height - 1, Math.round(place.crop.y * scale) + 2));
-          const left = Math.round(place.crop.x * scale) - 2;
-          const right = Math.round((place.crop.x + place.crop.w) * scale) + 2;
-          const sampleX = left >= 0 ? left : right < baseBmp.width ? right : 0;
+          const cut = Math.min(baseH, Math.max(0, Math.round((place.crop.y + place.crop.h) * k)));
+          const sampleY = Math.max(0, Math.min(baseH - 1, Math.round(place.crop.y * k) + 2));
+          const left = Math.round(place.crop.x * k) - 2;
+          const right = Math.round((place.crop.x + place.crop.w) * k) + 2;
+          const sampleX = left >= 0 ? left : right < baseW ? right : 0;
           const pixel = mctx.getImageData(sampleX, sampleY, 1, 1).data;
           mctx.fillStyle = `rgba(${pixel[0]}, ${pixel[1]}, ${pixel[2]}, ${pixel[3] / 255})`;
           mctx.fillRect(0, cut, merged.width, extra);
-          const below = baseBmp.height - cut;
+          const below = baseH - cut;
           if (below > 0) {
-            mctx.drawImage(baseBmp, 0, cut, baseBmp.width, below, 0, cut + extra, baseBmp.width, below);
+            mctx.drawImage(baseBmp, 0, cut / geom.scale, baseBmp.width, below / geom.scale,
+              0, cut + extra, baseW, below);
           }
         }
-        mctx.drawImage(canvas, Math.round(place.crop.x * scale), Math.round(place.crop.y * scale));
+        mctx.drawImage(canvas, Math.round(place.crop.x * k), Math.round(place.crop.y * k));
+        baseBmp.close();
         out = merged;
       }
-      let w = out.width * (settings.scalePercent / 100);
-      let h = out.height * (settings.scalePercent / 100);
-      const scale = Math.min(1, (settings.maxWidth || w) / w, (settings.maxHeight || h) / h);
-      w = Math.max(1, Math.round(w * scale));
-      h = Math.max(1, Math.round(h * scale));
-      if (w !== out.width || h !== out.height) {
-        const next = new OffscreenCanvas(w, h);
-        const nctx = next.getContext("2d");
-        nctx.imageSmoothingEnabled = true;
-        nctx.drawImage(out, 0, 0, w, h);
-        out = next;
-      }
       const blob = await out.convertToBlob({ type: mime, quality });
-      return {
-        data: new Uint8Array(await blob.arrayBuffer()),
-        width: out.width,
-        height: out.height,
-      };
+      return { data: new Uint8Array(await blob.arrayBuffer()), type: blob.type, width: out.width, height: out.height };
     },
     {
       shots: payload,
-      geom: { fullW, fullH, dpr },
-      settings,
-      mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
+      geom: { fullW, fullH, dpr, scale: limitScale(outputW, outputH, settings) },
+      mime,
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
       place,
     },
   );
-  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+  return encodedResult(raw, mime);
 }
 
 async function reencodeEncoded(page, encoded, { width, height, mime, quality }) {
@@ -210,55 +256,42 @@ async function reencodeEncoded(page, encoded, { width, height, mime, quality }) 
       const out = await canvas.convertToBlob({ type: mime, quality });
       return {
         data: new Uint8Array(await out.arrayBuffer()),
+        type: out.type,
         width: w,
         height: h,
       };
     },
     { data: encoded.data, width, height, mime, quality },
   );
-  return { data: asUint8(raw.data), width: raw.width, height: raw.height };
+  return encodedResult(raw, mime);
 }
 
 async function applyByteBudget(page, encoded, settings) {
   if (!settings.maxFileMB) return encoded;
-  const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
   const useQ = usesQuality(settings.format === "pdf" ? "jpeg" : settings.format);
   const cache = new Map();
-  let last = encoded;
-  const fake = {
-    width: encoded.width,
-    height: encoded.height,
-    getContext() {
-      return { imageSmoothingEnabled: true, drawImage() {} };
-    },
-  };
-  await fitFileSize(fake, settings, {
-    createCanvas: (w, h) => ({
-      width: w,
-      height: h,
-      getContext() {
-        return { imageSmoothingEnabled: true, drawImage() {} };
-      },
-    }),
+  const fakeCanvas = (width, height) => ({
+    width, height,
+    getContext: () => ({ imageSmoothingEnabled: true, drawImage() {} }),
+  });
+  const fitted = await fitFileSize(fakeCanvas(encoded.width, encoded.height), settings, {
+    createCanvas: fakeCanvas,
     encode: async (canvas, { type, quality }) => {
       const q = useQ ? quality : 1;
       const key = `${canvas.width}x${canvas.height}:${q}:${type}`;
-      if (cache.has(key)) {
-        last = cache.get(key);
-        return { size: last.data.byteLength };
+      if (!cache.has(key)) {
+        const next = await reencodeEncoded(page, encoded, {
+          width: canvas.width, height: canvas.height, mime: type, quality: q,
+        });
+        cache.set(key, { ...next, size: next.data.byteLength });
       }
-      const next = await reencodeEncoded(page, encoded, {
-        width: canvas.width,
-        height: canvas.height,
-        mime: type,
-        quality: q,
-      });
-      cache.set(key, next);
-      last = next;
-      return { size: next.data.byteLength };
+      return cache.get(key);
     },
   });
-  return last;
+  if (!fitted.fits) {
+    throw new Error(`Cannot meet --max-bytes (${Math.floor(settings.maxFileMB * 1024 * 1024)}); smallest encoded image is ${fitted.encoded.size} bytes`);
+  }
+  return fitted.encoded;
 }
 
 function delay(ms) {
@@ -328,7 +361,7 @@ async function tiledFullPage(page, settings, options) {
     },
     hideChrome: async (opts) => {
       const anchor = lastCrop?.w ? { x: lastCrop.x, y: lastCrop.y, w: lastCrop.w, h: lastCrop.h } : null;
-      await page.evaluate(
+      const hidden = await page.evaluate(
         (payload) => globalThis.__longshotHide?.hide(payload),
         {
           top: opts?.top !== false,
@@ -337,6 +370,13 @@ async function tiledFullPage(page, settings, options) {
           anchor,
         },
       );
+      if (!lastCrop) return hidden;
+      return { bottomRects: (hidden?.bottomRects || []).map((rect) => {
+        const x = Math.max(0, rect.x - lastCrop.x);
+        const y = Math.max(0, rect.y - lastCrop.y);
+        return { x, y, w: Math.min(lastCrop.w, rect.x + rect.w - lastCrop.x) - x,
+          h: Math.min(lastCrop.h, rect.y + rect.h - lastCrop.y) - y };
+      }).filter((rect) => rect.w > 0 && rect.h > 0) };
     },
     reset: async (orig) => {
       await page.evaluate(({ x, y, usedOverflow }) => {
@@ -367,7 +407,8 @@ async function tiledFullPage(page, settings, options) {
   progress("Stitching");
   const dpr = dim.devicePixelRatio || 1;
   const place = modalBase
-    ? { base: new Uint8Array(modalBase), crop: overflow.crop, dpr }
+    ? { base: new Uint8Array(modalBase), crop: overflow.crop, dpr,
+        width: modalBase.readUInt32BE(16), height: modalBase.readUInt32BE(20) }
     : null;
   let encoded = await encodeInPage(page, result.shots, { fullW: result.fullW, fullH: result.fullH, dpr }, settings, place);
   encoded = await applyByteBudget(page, encoded, settings);
@@ -375,10 +416,17 @@ async function tiledFullPage(page, settings, options) {
 }
 
 async function reencodePng(page, buf, settings) {
+  // PNG IHDR: width and height are big-endian at bytes 16 and 20.
+  const png = Buffer.from(buf);
+  const srcW = png.readUInt32BE(16);
+  const srcH = png.readUInt32BE(20);
+  const scale = limitScale(srcW, srcH, settings);
   const encoded = await reencodeEncoded(
     page,
     { data: new Uint8Array(buf) },
     {
+      width: Math.max(1, Math.round(srcW * scale)),
+      height: Math.max(1, Math.round(srcH * scale)),
       mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
     },
@@ -433,8 +481,28 @@ async function visibleCapture(page, settings) {
 async function nativeFullPage(page, settings) {
   progress("Native full-page screenshot (sticky chrome is not suppressed)");
   const dim = await measure(page);
-  const buf = await page.screenshot({ type: "png", fullPage: true, animations: "disabled" });
-  return { encoded: await reencodePng(page, buf, settings), dim, tiles: 1 };
+  const dpr = dim.devicePixelRatio || 1;
+  // A bitmap taller than the canvas limit cannot be decoded whole in the page, so
+  // tall pages are shot in slices and stitched (scaled) like tiled captures.
+  const sliceH = Math.floor(CANVAS_MAX_SIDE / 2 / dpr);
+  if (dim.scrollHeight <= sliceH) {
+    const buf = await page.screenshot({ type: "png", fullPage: true, animations: "disabled" });
+    return { encoded: await reencodePng(page, buf, settings), dim, tiles: 1 };
+  }
+  const shots = [];
+  for (let y = 0; y < dim.scrollHeight; y += sliceH) {
+    const buf = await page.screenshot({
+      type: "png",
+      fullPage: true,
+      animations: "disabled",
+      clip: { x: 0, y, width: dim.scrollWidth, height: Math.min(sliceH, dim.scrollHeight - y) },
+    });
+    shots.push({ x: 0, y, dataUrl: bufToDataUrl(buf) });
+  }
+  progress("Stitching");
+  let encoded = await encodeInPage(page, shots, { fullW: dim.scrollWidth, fullH: dim.scrollHeight, dpr }, settings);
+  encoded = await applyByteBudget(page, encoded, settings);
+  return { encoded, dim, tiles: shots.length };
 }
 
 async function selectorCapture(page, options, settings) {
@@ -488,12 +556,16 @@ async function writeOutput(options, encoded, dim, settings) {
   };
   const leaf = filename(record, settings).split("/").pop();
   const target = uniquePath(resolve(options.out || leaf), existsSync);
-  mkdirSync(dirname(target), { recursive: true });
+  assertBaselineSafeOutput(target, options.baseline);
   let body = Buffer.from(encoded.data);
   if (options.format === "pdf") {
     const pdf = jpegToPdfBlob(body, encoded.width, encoded.height, dim.title);
     body = Buffer.from(await pdf.arrayBuffer());
   }
+  if (options.maxBytes && body.length > options.maxBytes) {
+    throw new Error(`Cannot meet --max-bytes (${options.maxBytes}); final ${record.format} is ${body.length} bytes`);
+  }
+  mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, body);
   return {
     path: target,
@@ -506,26 +578,35 @@ async function writeOutput(options, encoded, dim, settings) {
 export async function capture(options) {
   const settings = settingsFromOptions(options);
   return withBrowser(options, async (browser) => {
-    const { page } = await preparePage(browser, options);
-    let result;
-    if (options.selector) result = await selectorCapture(page, options, settings);
-    else if (options.region) result = await regionCapture(page, options, settings);
-    else if (options.fullPage && options.engine === "native") result = await nativeFullPage(page, settings);
-    else if (options.fullPage) result = await tiledFullPage(page, settings, options);
-    else result = await visibleCapture(page, settings);
-    const written = await writeOutput(options, result.encoded, result.dim, settings);
-    const regions = await regionHashesInPage(page, result.encoded.data, written.mime);
-    return {
-      path: written.path,
-      width: result.encoded.width,
-      height: result.encoded.height,
-      format: options.format,
-      bytes: written.bytes,
-      engine: options.fullPage ? options.engine : "viewport",
-      tiles: result.tiles,
-      url: result.dim.url,
-      sha256: sha256(written.fileBody),
-      regions,
-    };
+    const page = await openPage(browser, options);
+    try {
+      await preparePage(page, options);
+      return await captureOnPage(page, options, settings);
+    } finally {
+      if (options.cdp) await page.close().catch(() => {});
+    }
   });
+}
+
+async function captureOnPage(page, options, settings) {
+  let result;
+  if (options.selector) result = await selectorCapture(page, options, settings);
+  else if (options.region) result = await regionCapture(page, options, settings);
+  else if (options.fullPage && options.engine === "native") result = await nativeFullPage(page, settings);
+  else if (options.fullPage) result = await tiledFullPage(page, settings, options);
+  else result = await visibleCapture(page, settings);
+  const written = await writeOutput(options, result.encoded, result.dim, settings);
+  const regions = await regionHashesInPage(page, result.encoded.data, written.mime);
+  return {
+    path: written.path,
+    width: result.encoded.width,
+    height: result.encoded.height,
+    format: options.format,
+    bytes: written.bytes,
+    engine: options.fullPage ? options.engine : "viewport",
+    tiles: result.tiles,
+    url: result.dim.url,
+    sha256: sha256(written.fileBody),
+    regions,
+  };
 }

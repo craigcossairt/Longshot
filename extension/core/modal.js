@@ -3,8 +3,13 @@
  * The column keeps its on-screen x, and extra scrolled height pushes the
  * page below the dialog down instead of leaving a transparent gap.
  */
-export function compositeModal(base, column, crop, dpr, createCanvas) {
-  const scale = dpr || 1;
+export function compositeModal(base, column, crop, dpr, createCanvas, outputScale = 1) {
+  if (outputScale !== 1) {
+    const resized = createCanvas(Math.max(1, Math.round(base.width * outputScale)), Math.max(1, Math.round(base.height * outputScale)));
+    resized.getContext("2d").drawImage(base, 0, 0, resized.width, resized.height);
+    base = resized;
+  }
+  const scale = (dpr || 1) * outputScale;
   const extra = Math.max(0, column.height - Math.round(crop.h * scale));
   const canvas = createCanvas(base.width, base.height + extra);
   const ctx = canvas.getContext("2d");

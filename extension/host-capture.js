@@ -37,7 +37,10 @@ function scrollInstant(x, y) {
   }
 }
 
+let scrollGeneration = 0;
+
 async function scrollToPos(x, y) {
+  const generation = scrollGeneration;
   const root = document.scrollingElement || document.documentElement;
   const maxX = Math.max(0, root.scrollWidth - window.innerWidth);
   const maxY = Math.max(0, root.scrollHeight - window.innerHeight);
@@ -46,6 +49,7 @@ async function scrollToPos(x, y) {
   for (let i = 0; i < 6; i++) {
     scrollInstant(tx, ty);
     await waitFrames(2);
+    if (generation !== scrollGeneration) break;
     if (Math.abs(window.scrollX - tx) < 1 && Math.abs(window.scrollY - ty) < 1) break;
   }
   return { x: window.scrollX, y: window.scrollY };
@@ -68,8 +72,8 @@ function dispatch(msg, sendResponse) {
     return;
   }
   if (msg.type === "LONGSHOT_HIDE_CHROME") {
-    globalThis.__longshotHide?.hide(msg);
-    sendResponse({ ok: true });
+    const preserved = globalThis.__longshotHide?.hide(msg);
+    sendResponse({ ok: true, ...preserved });
     return;
   }
   if (msg.type === "LONGSHOT_SCROLL") {
@@ -81,8 +85,9 @@ function dispatch(msg, sendResponse) {
     return true;
   }
   if (msg.type === "LONGSHOT_RESET") {
+    scrollGeneration += 1;
     if (globalThis.__longshotOverflow?.active()) globalThis.__longshotOverflow.reset();
-    else scrollInstant(msg.x, msg.y);
+    else if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) scrollInstant(msg.x, msg.y);
     globalThis.__longshotHide?.reset();
     sendResponse({ ok: true });
   }
@@ -90,19 +95,22 @@ function dispatch(msg, sendResponse) {
 }
 
 export function installHostCapture() {
+  // Resolve this tab's id once so messages meant for another tab can be declined
+  // synchronously; holding their channel open would hang the sender's PING.
+  let ownTabId;
+  const ownTab = chrome.tabs.getCurrent().then((tab) => {
+    ownTabId = tab?.id ?? null;
+    return ownTabId;
+  });
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.longshotTargetTabId == null) return;
-    const run = (tab) => {
-      if (!tab || tab.id !== msg.longshotTargetTabId) return;
-      const asyncWait = dispatch(msg, sendResponse);
-      if (asyncWait !== true) return;
-    };
-    const current = chrome.tabs.getCurrent();
-    if (current && typeof current.then === "function") {
-      current.then(run);
-      return true;
+    if (ownTabId !== undefined) {
+      if (ownTabId !== msg.longshotTargetTabId) return false;
+      return dispatch(msg, sendResponse) === true;
     }
-    chrome.tabs.getCurrent(run);
+    ownTab.then((id) => {
+      if (id === msg.longshotTargetTabId) dispatch(msg, sendResponse);
+    });
     return true;
   });
 }

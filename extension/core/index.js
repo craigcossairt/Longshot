@@ -3,7 +3,7 @@ export { HIDE_POLICY, shouldHide, installHideSession } from "./suppress.js";
 export { stitch } from "./stitch.js";
 export { compositeModal } from "./modal.js";
 export { cropVisible } from "./crop.js";
-export { fitLimits, fitFileSize } from "./fit.js";
+export { CANVAS_MAX_AREA, CANVAS_MAX_SIDE, fitFileSize, fitLimits, limitScale } from "./fit.js";
 export { slugify, filename, uniquePath } from "./filename.js";
 export { jpegToPdfBlob } from "./pdf.js";
 export { mimeFor, usesQuality } from "./formats.js";

@@ -112,3 +112,27 @@ describe("compositeModal", () => {
     assert.equal(out.data[(2 * 10 + 4) * 4], 210);
   });
 });
+
+// Reproduce the page only one pixel taller than its viewport: first tile has
+// header + no footer, last tile has footer + no header. Both must survive.
+it("preserves the complete last footer with a 599px overlap", async () => {
+  const first = solid(2, 600, [255, 255, 255, 255]);
+  const last = solid(2, 600, [255, 255, 255, 255]);
+  first.getContext("2d").fillStyle = "rgb(210,0,0)";
+  const firstCtx = first.getContext("2d");
+  firstCtx.fillStyle = "rgb(210,0,0)";
+  firstCtx.fillRect(0, 0, 2, 40);
+  const lastCtx = last.getContext("2d");
+  lastCtx.fillStyle = "rgb(0,0,210)";
+  lastCtx.fillRect(0, 540, 2, 60);
+  const out = await stitch([
+    {x: 0, y: 0, dataUrl: "first"},
+    {x: 0, y: 1, dataUrl: "last", bottomRects: [{x: 0, y: 540, w: 2, h: 60}]},
+  ], {fullW: 2, fullH: 601, dpr: 1}, {
+    decode: async (name) => name === "first" ? first : last,
+    createCanvas: bufferCanvas,
+  });
+  assert.equal(out.data[0], 210);
+  for (let y = 541; y <= 600; y++) assert.equal(out.data[(y * 2) * 4 + 2], 210, `footer row ${y}`);
+  assert.equal(out.data[(540 * 2) * 4], 255, "content immediately above footer survives");
+});

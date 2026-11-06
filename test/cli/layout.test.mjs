@@ -96,6 +96,17 @@ function opts(url, out, width, height) {
 }
 
 describe("full-page layout", { timeout: 180000 }, () => {
+  it("preserves the complete footer when the page is only one pixel taller than the viewport", async () => {
+    const url = pathToFileURL(join(root, "test/fixtures/cli-near-footer.html")).href;
+    const result = await capture(opts(url, join(tmp, "near-footer.png"), 800, 600));
+    const png = decodePng(readFileSync(result.path));
+    assert.equal(png.height, 601);
+    for (const y of [501, 550, 600]) {
+      assert.ok(near(pixel(png, 400, y), [20, 30, 140, 255]), `footer at ${y}: ${pixel(png, 400, y)}`);
+    }
+    assert.ok(near(pixel(png, 400, 500), [210, 75, 64, 255]), "content preceding footer remains visible");
+  });
+
   it("keeps a fixed side nav through the whole capture", async () => {
     const url = pathToFileURL(join(root, "test/fixtures/sidebar.html")).href;
     const result = await capture(opts(url, join(tmp, "sidebar.png"), 800, 600));

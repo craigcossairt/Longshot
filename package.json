@@ -1,6 +1,6 @@
 {
   "name": "@craigcossairt/longshot",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Headless full-page screenshots with sticky-header suppression, overflow-pane capture, and baseline diff.",
   "license": "MIT",
   "type": "module",
@@ -38,7 +38,9 @@
   },
   "scripts": {
     "longshot": "node ./cli/longshot.mjs",
-    "test": "node --test test/core/*.test.mjs test/cli/*.test.mjs"
+    "test": "node --test test/core/*.test.mjs test/cli/*.test.mjs",
+    "test:extension": "node --test test/extension/*.test.mjs",
+    "check:package": "node tools/check-package.mjs"
   },
   "dependencies": {
     "playwright": "^1.55.0"

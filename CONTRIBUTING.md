@@ -15,10 +15,23 @@ disk and ignored.
 
 ```
 node --test test/core/*.test.mjs test/cli/*.test.mjs
+node --test test/extension/*.test.mjs
 node tools/check-manifest.mjs
+npm run check:package
 ```
 
-README editor screenshot: `node tools/readme-shot.mjs` writes `docs/editor.png`.
+The CLI tests use the installed Chrome unless `LONGSHOT_CHANNEL=chromium`. The
+extension tests load `extension/` into Playwright's Chromium (branded Chrome
+ignores `--load-extension`), so they need `npx playwright install chromium`.
+
+`npm run check:package` packs and installs the actual npm tarball in a temporary
+directory, then captures a local fixture through its installed entry point.
+It installs dependencies offline from the npm cache populated by `npm ci`.
+Use the extension Playwright harness for behavioral browser checks; no website
+dev server or app build is required. Save review screenshots in `screenshots/`.
+
+Editor screenshot: `node tools/readme-shot.mjs` writes `docs/editor.png`. The
+README shows `docs/Longshot Editor Example.png`, an annotated copy updated by hand.
 
 ## Pull requests
 
