@@ -39,8 +39,11 @@ export async function runTiledCapture({
         if (mode === "full") {
           const pos = await scroll(x, y);
           await delay(delays.afterScroll);
-          if (index > 1) {
-            await hideChrome();
+          const lastTile = x === xs[xs.length - 1] && y === ys[ys.length - 1];
+          // A sticky footer is in the first viewport too. Leaving it there stamps
+          // it over the content it covered, and the last tile still has the real one.
+          if (!(index === 1 && lastTile)) {
+            await hideChrome({ top: index > 1, bottom: !lastTile });
             await delay(delays.afterHide);
           }
           const ax = Math.round(pos?.x ?? x);
@@ -62,5 +65,19 @@ export async function runTiledCapture({
     }
   }
   if (!shots.length) throw new Error("Capture produced no frames");
-  return { shots, dim, fullW, fullH, tiles: shots.length };
+  // scrollWidth can be larger than any position the page will actually scroll
+  // to (a modal lock, or a 100vw child). Size the canvas to the tiles we have.
+  let coveredW = 0;
+  let coveredH = 0;
+  for (const shot of shots) {
+    coveredW = Math.max(coveredW, shot.x + dim.viewportWidth);
+    coveredH = Math.max(coveredH, shot.y + dim.viewportHeight);
+  }
+  return {
+    shots,
+    dim,
+    fullW: Math.min(fullW, Math.max(coveredW, dim.viewportWidth)),
+    fullH: Math.min(fullH, Math.max(coveredH, dim.viewportHeight)),
+    tiles: shots.length,
+  };
 }

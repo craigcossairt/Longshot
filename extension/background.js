@@ -9,6 +9,7 @@ import {
   fitLimits,
   installHideSession,
   mimeFor,
+  compositeModal,
   runTiledCapture,
   stitch,
   usesQuality,
@@ -349,6 +350,24 @@ async function captureActive(mode) {
     ownPage,
   );
   const overflow = mode === "full" && dim?.overflow;
+  if (overflow?.kind === "modal" && overflow.fits) {
+    try {
+      report("Capturing", { index: 1, total: 1, phase: "capture" });
+      const dataUrl = await captureVisibleTabPaced(tab.windowId);
+      const bmp = await decode(dataUrl);
+      const canvas = createCanvas(bmp.width, bmp.height);
+      canvas.getContext("2d").drawImage(bmp, 0, 0);
+      await finishCapture(canvas, dim, settings);
+    } finally {
+      try {
+        await sendToTab(tab.id, { type: "LONGSHOT_RESET", x: dim.scrollX, y: dim.scrollY }, ownPage);
+      } catch {
+        /* tab closed */
+      }
+    }
+    return;
+  }
+  const modal = overflow?.kind === "modal" ? overflow : null;
   const captureDim = overflow
     ? {
         ...dim,
@@ -362,8 +381,15 @@ async function captureActive(mode) {
     : dim;
   let lastCrop = overflow?.crop || null;
   const dpr = dim.devicePixelRatio || 1;
-  const shellH = overflow?.crop?.y || 0;
+  const shellH = modal ? 0 : overflow?.crop?.y || 0;
   let shellCanvas = null;
+  let baseCanvas = null;
+  if (modal) {
+    const baseShot = await captureVisibleTabPaced(tab.windowId);
+    const bmp = await decode(baseShot);
+    baseCanvas = createCanvas(bmp.width, bmp.height);
+    baseCanvas.getContext("2d").drawImage(bmp, 0, 0);
+  }
   if (mode === "full" && shellH > 8) {
     const shellShot = await captureVisibleTabPaced(tab.windowId);
     shellCanvas = await cropVisible(
@@ -381,7 +407,20 @@ async function captureActive(mode) {
       if (pos?.crop) lastCrop = pos.crop;
       return pos;
     },
-    hideChrome: () => sendToTab(tab.id, { type: "LONGSHOT_HIDE_CHROME" }, ownPage),
+    hideChrome: (opts) => {
+      const anchor = lastCrop?.w ? { x: lastCrop.x, y: lastCrop.y, w: lastCrop.w, h: lastCrop.h } : null;
+      return sendToTab(
+        tab.id,
+        {
+          type: "LONGSHOT_HIDE_CHROME",
+          top: opts?.top !== false,
+          bottom: opts?.bottom !== false,
+          barsOnly: Boolean(modal),
+          anchor,
+        },
+        ownPage,
+      );
+    },
     reset: (orig) => sendToTab(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y }, ownPage),
     captureTile: async () => {
       const dataUrl = await captureVisibleTabPaced(tab.windowId);
@@ -401,6 +440,7 @@ async function captureActive(mode) {
     { decode, createCanvas },
   );
   if (shellCanvas) canvas = stackVertical(shellCanvas, canvas);
+  if (baseCanvas && modal?.crop) canvas = compositeModal(baseCanvas, canvas, modal.crop, dpr, createCanvas);
   canvas = compositeChrome(canvas, dim, settings);
   await finishCapture(canvas, dim, settings);
 }

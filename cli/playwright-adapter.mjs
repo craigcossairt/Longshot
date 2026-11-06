@@ -123,24 +123,49 @@ async function captureViewportPng(page) {
   return bufToDataUrl(buf);
 }
 
-async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
+async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings, place = null) {
   const payload = shots.map((shot) => ({
     x: shot.x,
     y: shot.y,
     bytes: dataUrlToBytes(shot.dataUrl),
   }));
   const raw = await page.evaluate(
-    async ({ shots, geom, settings, mime, quality }) => {
+    async ({ shots, geom, settings, mime, quality, place }) => {
       const canvas = new OffscreenCanvas(
         Math.max(1, Math.round(geom.fullW * geom.dpr)),
         Math.max(1, Math.round(geom.fullH * geom.dpr)),
       );
       const ctx = canvas.getContext("2d");
-      for (const shot of shots) {
+      for (let i = shots.length - 1; i >= 0; i--) {
+        const shot = shots[i];
         const bmp = await createImageBitmap(new Blob([shot.bytes], { type: "image/png" }));
         ctx.drawImage(bmp, Math.round(shot.x * geom.dpr), Math.round(shot.y * geom.dpr));
       }
       let out = canvas;
+      if (place?.base && place.crop) {
+        const baseBmp = await createImageBitmap(new Blob([place.base], { type: "image/png" }));
+        const scale = place.dpr || 1;
+        const extra = Math.max(0, canvas.height - Math.round(place.crop.h * scale));
+        const merged = new OffscreenCanvas(baseBmp.width, baseBmp.height + extra);
+        const mctx = merged.getContext("2d");
+        mctx.drawImage(baseBmp, 0, 0);
+        if (extra > 0) {
+          const cut = Math.min(baseBmp.height, Math.max(0, Math.round((place.crop.y + place.crop.h) * scale)));
+          const sampleY = Math.max(0, Math.min(baseBmp.height - 1, Math.round(place.crop.y * scale) + 2));
+          const left = Math.round(place.crop.x * scale) - 2;
+          const right = Math.round((place.crop.x + place.crop.w) * scale) + 2;
+          const sampleX = left >= 0 ? left : right < baseBmp.width ? right : 0;
+          const pixel = mctx.getImageData(sampleX, sampleY, 1, 1).data;
+          mctx.fillStyle = `rgba(${pixel[0]}, ${pixel[1]}, ${pixel[2]}, ${pixel[3] / 255})`;
+          mctx.fillRect(0, cut, merged.width, extra);
+          const below = baseBmp.height - cut;
+          if (below > 0) {
+            mctx.drawImage(baseBmp, 0, cut, baseBmp.width, below, 0, cut + extra, baseBmp.width, below);
+          }
+        }
+        mctx.drawImage(canvas, Math.round(place.crop.x * scale), Math.round(place.crop.y * scale));
+        out = merged;
+      }
       let w = out.width * (settings.scalePercent / 100);
       let h = out.height * (settings.scalePercent / 100);
       const scale = Math.min(1, (settings.maxWidth || w) / w, (settings.maxHeight || h) / h);
@@ -166,6 +191,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
       settings,
       mime: settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format),
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
+      place,
     },
   );
   return { data: asUint8(raw.data), width: raw.width, height: raw.height };
@@ -255,7 +281,21 @@ async function tiledFullPage(page, settings, options) {
       }
     : dim;
   let lastCrop = overflow?.crop || null;
-  if (overflow) {
+  if (overflow?.kind === "modal" && overflow.fits) {
+    progress("Modal fits the viewport");
+    try {
+      const buf = await page.screenshot({ type: "png", fullPage: false, animations: "disabled" });
+      const encoded = await reencodePng(page, buf, settings);
+      return { encoded, dim, tiles: 1 };
+    } finally {
+      await page.evaluate(() => globalThis.__longshotOverflow?.reset());
+    }
+  }
+  let modalBase = null;
+  if (overflow?.kind === "modal") {
+    progress(`Modal ${overflow.clientWidth}×${overflow.scrollHeight}`);
+    modalBase = await page.screenshot({ type: "png", fullPage: false, animations: "disabled" });
+  } else if (overflow) {
     progress(`Overflow pane ${overflow.scrollWidth}×${overflow.scrollHeight}`);
   } else {
     progress(`Page ${dim.scrollWidth}×${dim.scrollHeight} @ ${dim.devicePixelRatio}x`);
@@ -286,8 +326,17 @@ async function tiledFullPage(page, settings, options) {
         return { x: window.scrollX, y: window.scrollY };
       }, { x, y });
     },
-    hideChrome: async () => {
-      await page.evaluate(() => globalThis.__longshotHide?.hide());
+    hideChrome: async (opts) => {
+      const anchor = lastCrop?.w ? { x: lastCrop.x, y: lastCrop.y, w: lastCrop.w, h: lastCrop.h } : null;
+      await page.evaluate(
+        (payload) => globalThis.__longshotHide?.hide(payload),
+        {
+          top: opts?.top !== false,
+          bottom: opts?.bottom !== false,
+          barsOnly: overflow?.kind === "modal",
+          anchor,
+        },
+      );
     },
     reset: async (orig) => {
       await page.evaluate(({ x, y, usedOverflow }) => {
@@ -317,7 +366,10 @@ async function tiledFullPage(page, settings, options) {
   });
   progress("Stitching");
   const dpr = dim.devicePixelRatio || 1;
-  let encoded = await encodeInPage(page, result.shots, { fullW: result.fullW, fullH: result.fullH, dpr }, settings);
+  const place = modalBase
+    ? { base: new Uint8Array(modalBase), crop: overflow.crop, dpr }
+    : null;
+  let encoded = await encodeInPage(page, result.shots, { fullW: result.fullW, fullH: result.fullH, dpr }, settings, place);
   encoded = await applyByteBudget(page, encoded, settings);
   return { encoded, dim: captureDim, tiles: result.tiles };
 }

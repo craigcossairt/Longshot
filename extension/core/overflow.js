@@ -65,6 +65,65 @@ export function bindOverflowCapture(policy) {
     return extraH * c.clientWidth + extraW * c.clientHeight;
   }
 
+  function findOverlay(doc, vw, vh) {
+    let nodes;
+    try {
+      nodes = doc.querySelectorAll("*");
+    } catch {
+      return null;
+    }
+    let best = null;
+    const minArea = vw * vh * 0.6;
+    nodes.forEach((node) => {
+      if (node.id === "longshot-capture-style") return;
+      let style;
+      try {
+        style = globalThis.getComputedStyle(node);
+      } catch {
+        return;
+      }
+      if (style.position !== "fixed") return;
+      const rect = node.getBoundingClientRect();
+      if (rect.width < vw * 0.7 || rect.height < vh * 0.7) return;
+      if (rect.width * rect.height < minArea) return;
+      best = node;
+    });
+    return best;
+  }
+
+  function findScrollerWithin(root) {
+    const nodes = [root];
+    try {
+      root.querySelectorAll("*").forEach((node) => nodes.push(node));
+    } catch {
+      /* ignore */
+    }
+    let best = null;
+    let bestScore = 0;
+    for (const node of nodes) {
+      if (node.id === "longshot-capture-style") continue;
+      let style;
+      try {
+        style = globalThis.getComputedStyle(node);
+      } catch {
+        continue;
+      }
+      const oy = style.overflowY;
+      const ox = style.overflowX;
+      if (!/(auto|scroll|overlay)/.test(oy) && !/(auto|scroll|overlay)/.test(ox)) continue;
+      if (node.clientWidth < 8 || node.clientHeight < 8) continue;
+      const extraH = Math.max(0, node.scrollHeight - node.clientHeight);
+      const extraW = Math.max(0, node.scrollWidth - node.clientWidth);
+      if (extraH < 24 && extraW < 24) continue;
+      const score = extraH * node.clientWidth + extraW * node.clientHeight;
+      if (score > bestScore) {
+        best = node;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
   function find() {
     el = null;
     orig = null;
@@ -74,6 +133,27 @@ export function bindOverflowCapture(policy) {
     windowOrig = { x: globalThis.scrollX, y: globalThis.scrollY };
     const html = doc.documentElement;
     const body = doc.body;
+    const overlay = findOverlay(doc, vw, vh);
+    if (overlay) {
+      const target = findScrollerWithin(overlay);
+      if (!target) return { kind: "modal", fits: true };
+      el = target;
+      orig = { x: el.scrollLeft, y: el.scrollTop };
+      el.scrollLeft = 0;
+      el.scrollTop = 0;
+      const fits = el.scrollHeight <= el.clientHeight + 8;
+      return {
+        kind: "modal",
+        fits,
+        scrollLeft: el.scrollLeft,
+        scrollTop: el.scrollTop,
+        scrollWidth: el.clientWidth,
+        scrollHeight: Math.max(el.scrollHeight, el.clientHeight),
+        clientWidth: el.clientWidth,
+        clientHeight: el.clientHeight,
+        crop: cropRect(el),
+      };
+    }
     const pageScore =
       Math.max(0, Math.max(html.scrollHeight, body?.scrollHeight || 0) - vh) * vw +
       Math.max(0, Math.max(html.scrollWidth, body?.scrollWidth || 0) - vw) * vh;

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { HIDE_POLICY, installHideSession, shouldHide } from "../../extension/core/suppress.js";
+import { HIDE_POLICY, chromeKind, installHideSession, shouldHide } from "../../extension/core/suppress.js";
 
 const vw = 1280;
 
@@ -56,6 +56,69 @@ describe("shouldHide", () => {
     assert.equal(shouldHide(desc({ position: "relative", zIndex: 99 })), false);
   });
 
+  it("keeps a full-height side nav and a modal backdrop", () => {
+    const side = desc({
+      position: "fixed",
+      viewportHeight: 800,
+      rect: { top: 0, left: 0, height: 800, width: 240 },
+    });
+    const backdrop = desc({
+      position: "fixed",
+      viewportHeight: 800,
+      rect: { top: 0, left: 0, width: vw, height: 800 },
+    });
+    assert.equal(chromeKind(side), "sidebar");
+    assert.equal(chromeKind(backdrop), "overlay");
+    assert.equal(shouldHide(side), false);
+    assert.equal(shouldHide(backdrop), false);
+  });
+
+  it("hides a footer on middle tiles and keeps it on the last tile", () => {
+    const footer = desc({
+      position: "fixed",
+      viewportHeight: 800,
+      rect: { top: 752, left: 0, height: 48, width: vw, bottom: 800 },
+    });
+    assert.equal(chromeKind(footer), "bottombar");
+    assert.equal(shouldHide(footer), true);
+    assert.equal(shouldHide(footer, HIDE_POLICY, { top: true, bottom: false }), false);
+  });
+
+  it("treats a sticky footer pinned to a dialog crop as a bottom bar", () => {
+    const footer = desc({
+      position: "sticky",
+      viewportHeight: 800,
+      rect: { top: 600, left: 100, width: 600, height: 56, bottom: 656 },
+      anchor: { x: 80, y: 100, w: 680, h: 560 },
+    });
+    assert.equal(chromeKind(footer), "bottombar");
+    assert.equal(chromeKind({ ...footer, anchor: null }), "fixed");
+    assert.equal(shouldHide(footer, HIDE_POLICY, { top: false, bottom: true }), true);
+    assert.equal(shouldHide({ ...footer, anchor: null }, HIDE_POLICY, { top: false, bottom: true }), false);
+  });
+
+  it("treats an absolute dialog footer as a bottom bar", () => {
+    const footer = desc({
+      position: "absolute",
+      zIndex: "auto",
+      viewportHeight: 800,
+      rect: { top: 600, left: 100, width: 600, height: 56, bottom: 656 },
+      anchor: { x: 80, y: 100, w: 680, h: 560 },
+    });
+    assert.equal(chromeKind(footer), "bottombar");
+  });
+
+  it("keeps a modal shell when only pinned bars should hide", () => {
+    const dialog = desc({
+      position: "fixed",
+      viewportHeight: 800,
+      rect: { top: 40, left: 40, width: 900, height: 500 },
+    });
+    assert.equal(chromeKind(dialog), "fixed");
+    assert.equal(shouldHide(dialog, HIDE_POLICY, { top: true, bottom: true }), true);
+    assert.equal(shouldHide(dialog, HIDE_POLICY, { top: true, bottom: true, barsOnly: true }), false);
+  });
+
   it("uses HIDE_POLICY thresholds for the top-bar heuristic", () => {
     const almost = desc({
       position: "absolute",
@@ -72,7 +135,18 @@ describe("shouldHide", () => {
 });
 
 function fakeEl({ id = "", position = "static", zIndex = "auto", rect = { top: 0, height: 40, width: 100 } } = {}) {
-  const box = { top: rect.top, height: rect.height, width: rect.width, left: 0, right: rect.width, bottom: rect.top + rect.height };
+  const left = rect.left || 0;
+  const top = rect.top || 0;
+  const width = rect.width || 0;
+  const height = rect.height || 0;
+  const box = {
+    top,
+    left,
+    width,
+    height,
+    right: rect.right == null ? left + width : rect.right,
+    bottom: rect.bottom == null ? top + height : rect.bottom,
+  };
   return {
     id,
     _position: position,
@@ -111,6 +185,7 @@ function installDoc(elements, policy) {
   const all = [html, body, ...elements];
   const view = {
     innerWidth: vw,
+    innerHeight: 800,
     getComputedStyle(el) {
       return { position: el._position, zIndex: el._zIndex };
     },
@@ -126,6 +201,7 @@ function installDoc(elements, policy) {
   };
   globalThis.document = document;
   globalThis.innerWidth = vw;
+  globalThis.innerHeight = 800;
   delete globalThis.__longshotHide;
   installHideSession(policy);
   globalThis.__longshotHide.hide();
@@ -136,6 +212,7 @@ afterEach(() => {
   delete globalThis.__longshotHide;
   delete globalThis.document;
   delete globalThis.innerWidth;
+  delete globalThis.innerHeight;
 });
 
 describe("installHideSession", () => {
@@ -150,6 +227,59 @@ describe("installHideSession", () => {
     const bar = fakeEl({ position: "fixed" });
     installDoc([bar]);
     assert.equal(bar.style.getPropertyValue("visibility"), "hidden");
+  });
+
+  it("does not hide a full-height sidebar or a viewport backdrop", () => {
+    const side = fakeEl({ position: "fixed", rect: { top: 0, left: 0, height: 800, width: 240 } });
+    const backdrop = fakeEl({ position: "fixed", rect: { top: 0, left: 0, width: vw, height: 800 } });
+    installDoc([side, backdrop]);
+    assert.equal(side.style.getPropertyValue("visibility"), "");
+    assert.equal(backdrop.style.getPropertyValue("visibility"), "");
+  });
+
+  it("hides a footer pinned to the capture crop and reveals it for the last tile", () => {
+    const footer = fakeEl({
+      position: "sticky",
+      rect: { top: 600, left: 100, width: 600, height: 56, bottom: 656 },
+    });
+    installDoc([footer]);
+    globalThis.__longshotHide.hide({ top: false, bottom: true });
+    assert.equal(footer.style.getPropertyValue("visibility"), "");
+    globalThis.__longshotHide.hide({
+      top: false,
+      bottom: true,
+      anchor: { x: 80, y: 100, w: 680, h: 560 },
+    });
+    assert.equal(footer.style.getPropertyValue("visibility"), "hidden");
+    globalThis.__longshotHide.hide({
+      top: true,
+      bottom: false,
+      anchor: { x: 80, y: 100, w: 680, h: 560 },
+    });
+    assert.equal(footer.style.getPropertyValue("visibility"), "");
+  });
+
+  it("does not hide a modal shell when only pinned bars should hide", () => {
+    const dialog = fakeEl({
+      position: "fixed",
+      rect: { top: 40, left: 40, width: 900, height: 500 },
+    });
+    installDoc([dialog]);
+    assert.equal(dialog.style.getPropertyValue("visibility"), "hidden");
+    globalThis.__longshotHide.hide({ top: true, bottom: true, barsOnly: true });
+    assert.equal(dialog.style.getPropertyValue("visibility"), "");
+  });
+
+  it("keeps a bottom bar when the last tile asks to", () => {
+    const footer = fakeEl({
+      position: "fixed",
+      rect: { top: 752, left: 0, height: 48, width: vw, bottom: 800 },
+    });
+    installDoc([footer]);
+    assert.equal(footer.style.getPropertyValue("visibility"), "hidden");
+    globalThis.__longshotHide.reset();
+    globalThis.__longshotHide.hide({ top: true, bottom: false });
+    assert.equal(footer.style.getPropertyValue("visibility"), "");
   });
 
   it("hides a high-z-index absolute top bar", () => {

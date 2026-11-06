@@ -17,7 +17,7 @@ function dimFor({ scrollWidth, scrollHeight, vw, vh }) {
 }
 
 describe("runTiledCapture", () => {
-  it("hides chrome from tile 2 onward and uses actual scroll positions", async () => {
+  it("hides the footer on every tile but the last and uses actual scroll positions", async () => {
     const hides = [];
     const scrolls = [];
     const result = await runTiledCapture({
@@ -27,8 +27,8 @@ describe("runTiledCapture", () => {
         scrolls.push([x, y]);
         return { x, y };
       },
-      hideChrome: async () => {
-        hides.push(scrolls.length);
+      hideChrome: async (opts) => {
+        hides.push(opts);
       },
       reset: async () => {},
       captureTile: async () => "data:tile",
@@ -43,7 +43,43 @@ describe("runTiledCapture", () => {
         [0, 1200],
       ],
     );
-    assert.deepEqual(hides, [2, 3]);
+    assert.deepEqual(hides, [
+      { top: false, bottom: true },
+      { top: true, bottom: true },
+      { top: true, bottom: false },
+    ]);
+  });
+
+  it("leaves chrome alone when the page fits in one tile", async () => {
+    let hides = 0;
+    const result = await runTiledCapture({
+      mode: "full",
+      dim: dimFor({ scrollWidth: 800, scrollHeight: 600, vw: 800, vh: 600 }),
+      scroll: async (x, y) => ({ x, y }),
+      hideChrome: async () => {
+        hides += 1;
+      },
+      reset: async () => {},
+      captureTile: async () => "data:tile",
+      delay: async () => {},
+    });
+    assert.equal(result.tiles, 1);
+    assert.equal(hides, 0);
+  });
+
+  it("sizes the canvas to the tiles that actually scrolled", async () => {
+    const result = await runTiledCapture({
+      mode: "full",
+      dim: dimFor({ scrollWidth: 1600, scrollHeight: 800, vw: 800, vh: 800 }),
+      scroll: async () => ({ x: 0, y: 0 }),
+      hideChrome: async () => {},
+      reset: async () => {},
+      captureTile: async () => "data:tile",
+      delay: async () => {},
+    });
+    assert.equal(result.tiles, 1);
+    assert.equal(result.fullW, 800);
+    assert.equal(result.fullH, 800);
   });
 
   it("skips a duplicate actual scroll position", async () => {

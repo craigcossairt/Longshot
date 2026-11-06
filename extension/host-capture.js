@@ -68,7 +68,7 @@ function dispatch(msg, sendResponse) {
     return;
   }
   if (msg.type === "LONGSHOT_HIDE_CHROME") {
-    globalThis.__longshotHide?.hide();
+    globalThis.__longshotHide?.hide(msg);
     sendResponse({ ok: true });
     return;
   }

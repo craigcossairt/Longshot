@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Modal footer fixture</title>
+    <style>
+      html, body { margin: 0; background: #224466; }
+      .page { height: 400px; }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: #203040;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .dialog {
+        width: 640px;
+        height: 520px;
+        overflow: auto;
+        background: #f4f1ea;
+      }
+      .under {
+        margin-top: 456px;
+        height: 64px;
+        background: rgb(220, 170, 30);
+      }
+      .fill { height: 800px; background: #efe7d6; }
+      .end { height: 80px; background: rgb(47, 111, 79); }
+      .footer {
+        position: sticky;
+        bottom: 0;
+        height: 64px;
+        background: rgb(20, 30, 140);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page"></div>
+    <div class="backdrop">
+      <div class="dialog" id="dialog">
+        <div class="under"></div>
+        <div class="fill"></div>
+        <div class="end"></div>
+        <div class="footer"></div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,5 +1,6 @@
 (() => {
   const restores = [];
+  const chromeRestores = [];
   const hiddenEls = new WeakSet();
 
   function pushRestore(fn) {
@@ -52,16 +53,55 @@
     const prev = el.style.getPropertyValue("visibility");
     const pri = el.style.getPropertyPriority("visibility");
     el.style.setProperty("visibility", "hidden", "important");
-    pushRestore(() => {
+    chromeRestores.push(() => {
       hiddenEls.delete(el);
       if (prev) el.style.setProperty("visibility", prev, pri);
       else el.style.removeProperty("visibility");
     });
   }
 
-  function hideFloating(root = document) {
+  function resetChrome() {
+    while (chromeRestores.length) chromeRestores.pop()();
+  }
+
+  function hideFrames(anchor, vw, vh) {
+    const frames = [{ left: 0, top: 0, width: vw, height: vh, right: vw, bottom: vh }];
+    if (!anchor) return frames;
+    const left = anchor.left ?? anchor.x ?? 0;
+    const top = anchor.top ?? anchor.y ?? 0;
+    const width = anchor.width ?? anchor.w ?? 0;
+    const height = anchor.height ?? anchor.h ?? 0;
+    if (width < 8 || height < 8) return frames;
+    frames.push({
+      left,
+      top,
+      width,
+      height,
+      right: anchor.right == null ? left + width : anchor.right,
+      bottom: anchor.bottom == null ? top + height : anchor.bottom,
+    });
+    return frames;
+  }
+
+  function barMatch(box, frames, where) {
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i];
+      const wide = box.width > frame.width * 0.55 && box.height > 24 && box.height < 180;
+      if (!wide) continue;
+      if (where === "bottom" && box.top > frame.top + frame.height * 0.5 && box.bottom >= frame.bottom - 24) return true;
+      if (where === "top" && box.top >= frame.top - 8 && box.top < frame.top + 96) return true;
+    }
+    return false;
+  }
+
+  function hideFloating(root = document, opts) {
     const view = root.defaultView || window;
     const vw = view.innerWidth || window.innerWidth;
+    const vh = view.innerHeight || window.innerHeight || vw;
+    const hideTop = !opts || opts.top !== false;
+    const hideBottom = !opts || opts.bottom !== false;
+    const barsOnly = Boolean(opts && opts.barsOnly);
+    const frames = hideFrames(opts && opts.anchor, vw, vh);
     let nodes;
     try {
       nodes = root.querySelectorAll("*");
@@ -78,19 +118,52 @@
         return;
       }
       const pos = style.position;
+      const rect = el.getBoundingClientRect();
+      const width = rect.width || 0;
+      const height = rect.height || 0;
+      const left = rect.left || 0;
+      const top = rect.top || 0;
+      const box = {
+        left,
+        top,
+        width,
+        height,
+        right: rect.right == null ? left + width : rect.right,
+        bottom: rect.bottom == null ? top + height : rect.bottom,
+      };
       if (pos === "fixed" || pos === "sticky") {
-        hideElement(el);
+        const sidebar = height >= vh * 0.7 && width > 0 && width <= vw * 0.45 && (left <= 8 || box.right >= vw - 8);
+        if (sidebar) return;
+        const overlay = pos === "fixed" && width >= vw * 0.7 && height >= vh * 0.7 && width * height >= vw * vh * 0.6;
+        if (overlay) return;
+        if (barMatch(box, frames, "bottom")) {
+          if (hideBottom) hideElement(el);
+          return;
+        }
+        if (barMatch(box, frames, "top")) {
+          if (hideTop) hideElement(el);
+          return;
+        }
+        if (!barsOnly && hideTop) hideElement(el);
         return;
       }
       if (pos !== "absolute") return;
-      const rect = el.getBoundingClientRect();
+      if (barMatch(box, frames, "bottom")) {
+        if (hideBottom) hideElement(el);
+        return;
+      }
       const z = Number(style.zIndex);
-      const topBar = rect.height > 24 && rect.height < 180 && rect.width > vw * 0.55 && rect.top >= -8 && rect.top < 96;
-      if (topBar && Number.isFinite(z) && z > 1) hideElement(el);
+      if (hideTop && barMatch(box, frames, "top") && Number.isFinite(z) && z > 1) hideElement(el);
     });
     root.querySelectorAll("iframe, frame").forEach((frame) => {
       try {
-        if (frame.contentDocument) hideFloating(frame.contentDocument);
+        if (frame.contentDocument) {
+          hideFloating(frame.contentDocument, {
+            top: opts && opts.top,
+            bottom: opts && opts.bottom,
+            barsOnly: opts && opts.barsOnly,
+          });
+        }
       } catch {
         /* cross-origin */
       }
@@ -263,8 +336,9 @@
       return;
     }
     if (msg.type === "LONGSHOT_HIDE_CHROME") {
-      if (globalThis.__longshotHide) globalThis.__longshotHide.hide();
-      else hideFloating(document);
+      resetChrome();
+      if (globalThis.__longshotHide) globalThis.__longshotHide.hide(msg);
+      else hideFloating(document, msg);
       sendResponse({ ok: true });
       return;
     }
@@ -280,6 +354,7 @@
       if (globalThis.__longshotOverflow?.active()) globalThis.__longshotOverflow.reset();
       else scrollInstant(msg.x, msg.y);
       if (globalThis.__longshotHide) globalThis.__longshotHide.reset();
+      resetChrome();
       while (restores.length) restores.pop()();
       sendResponse({ ok: true });
     }
