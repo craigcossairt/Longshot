@@ -1,0 +1,14 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Small modal overflow</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #203040; }
+  #dialog { position: fixed; left: 100px; top: 80px; width: 400px; height: 300px; overflow: auto; scrollbar-width: none; }
+  #dialog::-webkit-scrollbar { display: none; }
+  #content { position: relative; width: 400px; height: 315px; background: white; }
+  .end { position: absolute; right: 0; bottom: 0; width: 15px; height: 15px; background: #2f6f4f; }
+</style>
+<div id="dialog" role="dialog" aria-modal="true"><div id="content"><div class="end"></div></div></div>
+<script>
+  if (new URLSearchParams(location.search).get('axis') === 'x') {
+    const content = document.querySelector('#content'); content.style.width = '415px'; content.style.height = '300px';
+  }
+</script></html>

@@ -39,19 +39,20 @@ export async function runTiledCapture({
         if (mode === "full") {
           const pos = await scroll(x, y);
           await delay(delays.afterScroll);
-          const lastTile = x === xs[xs.length - 1] && y === ys[ys.length - 1];
+          const firstRow = y === ys[0];
+          const lastRow = y === ys[ys.length - 1];
           // A sticky footer is in the first viewport too. Leaving it there stamps
           // it over the content it covered, and the last tile still has the real one.
           let preserved;
-          if (!(index === 1 && lastTile)) {
-            preserved = await hideChrome({ top: index > 1, bottom: !lastTile });
+          if (total > 1) {
+            preserved = await hideChrome({ top: !firstRow, bottom: !lastRow });
             await delay(delays.afterHide);
           }
           const ax = Math.round(pos?.x ?? x);
           const ay = Math.round(pos?.y ?? y);
-          // The final frame reveals footer chrome hidden in earlier frames, even
+          // The bottom row reveals footer chrome hidden in earlier frames, even
           // if scrolling clamped to a position we already captured.
-          if (!lastTile && shots.some((shot) => shot.x === ax && shot.y === ay)) continue;
+          if (!lastRow && shots.some((shot) => shot.x === ax && shot.y === ay)) continue;
           const dataUrl = await captureTile();
           shots.push({ x: ax, y: ay, dataUrl, ...(preserved?.bottomRects?.length ? { bottomRects: preserved.bottomRects } : {}) });
         } else {

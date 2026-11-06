@@ -6,7 +6,7 @@ export const CANVAS_MAX_AREA = 16384 * 16384;
 
 // Overall scale for a width x height image: scalePercent, then the max width/height
 // settings and canvas limits, never enlarging past scalePercent.
-export function limitScale(width, height, settings) {
+export function limitScale(width, height, settings, dimensionsAtScale) {
   const pct = (settings.scalePercent || 100) / 100;
   const w = Math.max(1, width * pct);
   const h = Math.max(1, height * pct);
@@ -18,7 +18,19 @@ export function limitScale(width, height, settings) {
     CANVAS_MAX_SIDE / h,
     Math.sqrt(CANVAS_MAX_AREA / (w * h)),
   );
-  return pct * fit;
+  let scale = pct * fit;
+  const maxW = Math.max(1, Math.floor(Math.min(settings.maxWidth || CANVAS_MAX_SIDE, CANVAS_MAX_SIDE)));
+  const maxH = Math.max(1, Math.floor(Math.min(settings.maxHeight || CANVAS_MAX_SIDE, CANVAS_MAX_SIDE)));
+  // Composites round each component separately. Validate the actual allocation,
+  // including area, then reserve another output pixel until it fits.
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const size = dimensionsAtScale ? dimensionsAtScale(scale) : {
+      width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)),
+    };
+    if (size.width <= maxW && size.height <= maxH && size.width * size.height <= CANVAS_MAX_AREA) return scale;
+    scale -= Math.min(scale / 2, 1 / Math.max(width, height, 1));
+  }
+  throw new Error("Cannot fit capture within canvas limits");
 }
 
 export function fitLimits(source, settings, { createCanvas }) {

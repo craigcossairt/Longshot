@@ -136,8 +136,11 @@ export function assertBaselineSafeOutput(imagePath, baselinePath) {
   if ([imagePath, verdictPath(imagePath)].some((path) => {
     if (canonical(path) === baseline) return true;
     const target = identity(path);
-    return baselineStat && target && baselineStat.ino !== 0n && target.ino !== 0n &&
-      baselineStat.dev === target.dev && baselineStat.ino === target.ino;
+    if (!baselineStat || !target) return false;
+    // Some filesystems cannot identify hard links. An existing destination is
+    // indeterminate there, so refuse it instead of risking baseline bytes.
+    if (baselineStat.ino === 0n || target.ino === 0n) return true;
+    return baselineStat.dev === target.dev && baselineStat.ino === target.ino;
   })) {
     const error = new Error("Output would overwrite --baseline; choose a different --out path");
     error.code = 2;

@@ -17,6 +17,26 @@ function dimFor({ scrollWidth, scrollHeight, vw, vh }) {
 }
 
 describe("runTiledCapture", () => {
+  it("preserves headers across the top row and footers across a clamped bottom row", async () => {
+    const hides = [];
+    let current;
+    const footer = [{x:0,y:270,w:400,h:30}];
+    const result = await runTiledCapture({
+      mode: "full", dim: dimFor({scrollWidth:800,scrollHeight:700,vw:400,vh:300}),
+      scroll: async (x, y) => ({x, y: Math.min(y, 300)}),
+      hideChrome: async (opts) => { current = opts; hides.push(opts); return opts.bottom ? {} : {bottomRects:footer}; },
+      reset: async () => {}, delay: async () => {},
+      captureTile: async () => JSON.stringify(current),
+    });
+    assert.deepEqual(hides, [
+      {top:false,bottom:true}, {top:false,bottom:true},
+      {top:true,bottom:true}, {top:true,bottom:true},
+      {top:true,bottom:false}, {top:true,bottom:false},
+    ]);
+    assert.equal(result.shots.length, 6);
+    assert.deepEqual(result.shots.slice(-2).map((s) => s.bottomRects), [footer,footer]);
+  });
+
   it("hides the footer on every tile but the last and uses actual scroll positions", async () => {
     const hides = [];
     const scrolls = [];

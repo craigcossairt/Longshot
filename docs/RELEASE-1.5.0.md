@@ -22,6 +22,8 @@ extension editor, capture reliability, and the headless CLI.
   only one pixel taller than the viewport.
 - Percentage scaling applies once; accepted JPEG/WebP compression is retained.
 - Browser-bar text and controls scale with the captured image.
+- Small modal overflows and headers/footers spanning several tile columns are
+  captured completely. Rounded image dimensions stay within canvas limits.
 - Custom-folder downloads use unique filenames, including concurrent exports.
 - Images, clipboard copies, and PDFs exclude editor handles and crop guides.
 - Saved thumbnails and image format metadata match edited captures.
@@ -32,6 +34,8 @@ extension editor, capture reliability, and the headless CLI.
 - Failed feedback submissions retain their draft for retry.
 - CLI baselines are read before capture and protected from output collisions.
 - Baseline protection detects hard links and case-insensitive filename aliases.
+- Existing output paths are rejected when the filesystem cannot establish that
+  they are distinct from the baseline.
 - CLI CDP sessions disconnect while leaving the external browser and tabs open.
 - Strict-CSP pages capture over CDP without disabling their CSP.
 - Unmet CLI byte budgets fail explicitly, including PDF overhead.

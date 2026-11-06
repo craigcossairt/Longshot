@@ -107,8 +107,36 @@ describe("full-page layout", { timeout: 180000 }, () => {
       assert.ok(near(pixel(png, 1190, 10), [155, 35, 202, 255]), "right margin remains visible");
       assert.ok(near(pixel(png, 10, png.height - 10), [207, 171, 34, 255]), "bottom margin remains visible");
       assert.ok(near(pixel(png, 1190, png.height - 10), [32, 48, 64, 255]), "expanded corner has backdrop");
+      if (tall) {
+        for (const y of [379, 380, 779, 780]) {
+          for (const x of [0, 99, 900, 1199]) assert.ok(near(pixel(png, x, y), [32,48,64,255]), `opaque backdrop at ${x},${y}`);
+        }
+        for (const y of [379, 380, 739, 740]) {
+          assert.ok(near(pixel(png, 499, y), [210,75,64,255]), `left content at transition ${y}`);
+          assert.ok(near(pixel(png, 500, y), [52,86,171,255]), `right content at transition ${y}`);
+        }
+      }
     });
   }
+
+  it("retains top and bottom bars across every modal tile column", async () => {
+    const url = pathToFileURL(join(root, "test/fixtures/modal-grid-bars.html")).href;
+    const result = await capture(opts(url, join(tmp, "grid-bars.png"), 800, 600));
+    const png = decodePng(readFileSync(result.path));
+    assert.deepEqual([png.width,png.height], [1200,1000]);
+    for (const x of [110, 490, 510, 890]) {
+      assert.ok(near(pixel(png, x, 90), [210,75,64,255]), `header at ${x}`);
+      assert.ok(near(pixel(png, x, 770), [52,86,171,255]), `footer at ${x}`);
+    }
+  });
+
+  it("includes the final fifteen pixels of a scrolling modal", async () => {
+    const url = pathToFileURL(join(root, "test/fixtures/modal-small-overflow.html")).href;
+    const result = await capture(opts(url, join(tmp, "small-modal.png"), 800, 600));
+    const png = decodePng(readFileSync(result.path));
+    assert.deepEqual([png.width,png.height], [800,615]);
+    assert.ok(near(pixel(png, 499, 394), [47,111,79,255]));
+  });
 
   it("preserves the complete footer when the page is only one pixel taller than the viewport", async () => {
     const url = pathToFileURL(join(root, "test/fixtures/cli-near-footer.html")).href;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync, linkSync, existsSync } from "node:fs";
+import fs, { mkdtempSync, writeFileSync, rmSync, linkSync, existsSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -17,6 +18,24 @@ const tmp = mkdtempSync(join(tmpdir(), "longshot-verdict-"));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
 describe("baseline file identity", () => {
+  for (const linked of [false, true]) {
+    it(`refuses an indeterminate ${linked ? "hard-linked" : "distinct"} sidecar when inode is unavailable`, (t) => {
+      const baseline = join(tmp, `unknown-${linked}.json`);
+      const image = join(tmp, `unknown-target-${linked}.png`);
+      const sidecar = join(tmp, `unknown-target-${linked}.verdict.json`);
+      writeFileSync(baseline, "baseline");
+      if (linked) linkSync(baseline, sidecar);
+      else writeFileSync(sidecar, "previous output");
+      const stat = fs.statSync;
+      t.mock.method(fs, "statSync", (...args) => ({...stat(...args), ino: 0n}));
+      syncBuiltinESMExports();
+      try {
+        assert.throws(() => assertBaselineSafeOutput(image, baseline), /overwrite --baseline/);
+        assert.doesNotThrow(() => assertBaselineSafeOutput(join(tmp, `fresh-${linked}.png`), baseline));
+      } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+    });
+  }
+
   for (const sidecar of [false, true]) {
     it(`rejects a hard-linked ${sidecar ? "verdict" : "image"} destination`, () => {
       const baseline = join(tmp, `hardlink-${sidecar}.json`);

@@ -161,6 +161,13 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings, place 
   const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
   const outputW = place ? place.width + Math.max(0, fullW * dpr - place.crop.w * dpr) : fullW * dpr;
   const outputH = place ? place.height + Math.max(0, fullH * dpr - place.crop.h * dpr) : fullH * dpr;
+  const scale = limitScale(outputW, outputH, settings, place ? (s) => {
+    const k = dpr * s;
+    return {
+      width: Math.max(1, Math.round(place.width * s)) + Math.max(0, Math.max(1, Math.round(fullW * k)) - Math.round(place.crop.w * k)),
+      height: Math.max(1, Math.round(place.height * s)) + Math.max(0, Math.max(1, Math.round(fullH * k)) - Math.round(place.crop.h * k)),
+    };
+  } : undefined);
   const raw = await page.evaluate(
     async ({ shots, geom, mime, quality, place }) => {
       // Scale before allocating, including the surrounding viewport of a modal.
@@ -250,7 +257,7 @@ async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings, place 
     },
     {
       shots: payload,
-      geom: { fullW, fullH, dpr, scale: limitScale(outputW, outputH, settings) },
+      geom: { fullW, fullH, dpr, scale },
       mime,
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
       place,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -14,9 +14,9 @@ const channel = process.env.LONGSHOT_CHANNEL || "chrome";
 const tmp = mkdtempSync(join(tmpdir(), "longshot-process-"));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
-function run(args) {
+function run(args, cwd) {
   return new Promise((resolve, reject) => {
-    execFile(process.execPath, [entry, ...args], { timeout: 45000 }, (error, stdout, stderr) => {
+    execFile(process.execPath, [entry, ...args], { timeout: 45000, cwd }, (error, stdout, stderr) => {
       if (error?.killed) return reject(new Error(`CLI did not exit: ${stderr}`));
       try { resolve({ code: error?.code || 0, result: JSON.parse(stdout) }); }
       catch (cause) { reject(new Error(`Invalid CLI response: ${stdout} ${stderr}`, { cause })); }
@@ -24,9 +24,32 @@ function run(args) {
   });
 }
 
-const args = (out) => ["--url", fixture, "--channel", channel, "--width", "200", "--height", "200", "--out", out];
+const args = (out) => ["--url", fixture, "--channel", channel, "--width", "200", "--height", "200", ...(out ? ["--out", out] : [])];
 
 describe("CLI output safety", { timeout: 180000 }, () => {
+  for (const explicit of [false, true]) {
+    it(`protects the baseline after choosing a suffix for ${explicit ? "explicit" : "default"} output`, async () => {
+      const cwd = join(tmp, `suffix-${explicit}`); mkdirSync(cwd);
+      const captureArgs = args(explicit ? join(cwd, "capture.png") : undefined);
+      const first = await run(captureArgs, cwd);
+      assert.equal(first.code, 0, first.result.error);
+      const baseline = readFileSync(first.result.verdict);
+      const second = await run([...captureArgs, "--baseline", first.result.verdict], cwd);
+      assert.equal(second.code, 0, second.result.error);
+      assert.notEqual(second.result.path, first.result.path);
+      assert.deepEqual(readFileSync(first.result.verdict), baseline);
+      const prefix = first.result.path.slice(0, -4);
+      const nextImage = `${prefix} (2).png`;
+      const collision = `${prefix} (2).verdict.json`;
+      writeFileSync(collision, baseline);
+      const blocked = await run([...captureArgs, "--baseline", collision], cwd);
+      assert.equal(blocked.code, 2);
+      assert.match(blocked.result.error, /overwrite --baseline/);
+      assert.equal(existsSync(nextImage), false);
+      assert.deepEqual(readFileSync(collision), baseline);
+    });
+  }
+
   for (const format of ["jpeg", "webp"]) {
     it(`retains the original ${format} bytes when they already fit`, async () => {
       const noise = pathToFileURL(join(root, "test/fixtures/cli-budget-noise.html")).href;

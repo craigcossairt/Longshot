@@ -497,7 +497,20 @@ async function captureTab(mode, tab, popup, guard) {
   const height = baseCanvas
     ? baseCanvas.height + Math.max(0, result.fullH * dpr - Math.round(modal.crop.h * dpr))
     : result.fullH * dpr + shellPx;
-  const scale = limitScale(width, height + chromeHeight(settings), settings);
+  const scale = limitScale(width, height + chromeHeight(settings), settings, (s) => {
+    const k = dpr * s;
+    let w = Math.max(1, Math.round(result.fullW * k));
+    let h = Math.max(1, Math.round(result.fullH * k));
+    if (shellCanvas) {
+      w = Math.max(w, Math.max(1, Math.round(shellCanvas.width * s)));
+      h += Math.max(1, Math.round(shellCanvas.height * s));
+    }
+    if (baseCanvas) {
+      w = Math.max(1, Math.round(baseCanvas.width * s)) + Math.max(0, w - Math.round(modal.crop.w * k));
+      h = Math.max(1, Math.round(baseCanvas.height * s)) + Math.max(0, h - Math.round(modal.crop.h * k));
+    }
+    return { width: w, height: h + Math.round(chromeHeight(settings) * s) };
+  });
   let canvas = await stitch(result.shots, { fullW: result.fullW, fullH: result.fullH, dpr, scale }, { decode, createCanvas });
   if (shellCanvas) canvas = stackVertical(shellCanvas, canvas, scale);
   if (baseCanvas) canvas = compositeModal(baseCanvas, canvas, modal.crop, dpr, createCanvas, scale);

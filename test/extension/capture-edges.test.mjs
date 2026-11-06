@@ -18,6 +18,40 @@ async function withPage(fixture, fn) {
 }
 
 describe("capture boundary and modal classification", { timeout: 180000 }, () => {
+  for (const axis of ["x", "y"]) {
+    it(`includes a fifteen-pixel modal overflow on the ${axis} axis`, async () => {
+      await withPage(`modal-small-overflow.html?axis=${axis}`, async (ext, page) => {
+        const popup = await openPopup(ext);
+        assert.deepEqual(await requestCapture(popup), {ok:true});
+        const record = await currentCapture(ext.worker);
+        assert.deepEqual([record.width,record.height], axis === "x" ? [815,600] : [800,615]);
+        const end = await page.evaluate(async ({dataUrl, axis}) => {
+          const bmp = await createImageBitmap(await (await fetch(dataUrl)).blob());
+          const ctx = new OffscreenCanvas(bmp.width,bmp.height).getContext("2d");
+          ctx.drawImage(bmp,0,0);
+          return [...ctx.getImageData(axis === "x" ? 514 : 499, axis === "x" ? 379 : 394,1,1).data];
+        }, {dataUrl:record.dataUrl,axis});
+        assert.deepEqual(end,[47,111,79,255]);
+      });
+    });
+  }
+
+  it("retains the complete header and footer across modal tile columns", async () => {
+    await withPage("modal-grid-bars.html", async (ext,page) => {
+      const popup = await openPopup(ext);
+      assert.deepEqual(await requestCapture(popup), {ok:true});
+      const record = await currentCapture(ext.worker);
+      assert.deepEqual([record.width,record.height],[1200,1000]);
+      const bars = await page.evaluate(async (dataUrl) => {
+        const bmp = await createImageBitmap(await (await fetch(dataUrl)).blob());
+        const ctx = new OffscreenCanvas(bmp.width,bmp.height).getContext("2d");
+        ctx.drawImage(bmp,0,0);
+        return [110,490,510,890].flatMap((x) => [90,770].map((y) => [...ctx.getImageData(x,y,1,1).data]));
+      },record.dataUrl);
+      assert.deepEqual(bars,Array.from({length:4},() => [[210,75,64,255],[52,86,171,255]]).flat());
+    });
+  });
+
   it("retains every pixel of absolute page content spanning a tile boundary", async () => {
     await withPage("capture-absolute-boundary.html", async (ext, page) => {
       const popup = await openPopup(ext);

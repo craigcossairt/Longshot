@@ -114,7 +114,7 @@ export function bindOverflowCapture(policy) {
     return best;
   }
 
-  function findScrollerWithin(root) {
+  function findScrollerWithin(root, minExtra = 24) {
     const nodes = [root];
     try {
       root.querySelectorAll("*").forEach((node) => nodes.push(node));
@@ -138,7 +138,7 @@ export function bindOverflowCapture(policy) {
       if (node.clientWidth < 8 || node.clientHeight < 8 || !visible(node)) continue;
       const extraH = Math.max(0, node.scrollHeight - node.clientHeight);
       const extraW = Math.max(0, node.scrollWidth - node.clientWidth);
-      if (extraH < 24 && extraW < 24) continue;
+      if (extraH < minExtra && extraW < minExtra) continue;
       const score = extraH * node.clientWidth + extraW * node.clientHeight;
       if (score > bestScore) {
         best = node;
@@ -160,13 +160,13 @@ export function bindOverflowCapture(policy) {
     const body = doc.body;
     const overlay = findOverlay(doc, vw, vh);
     if (overlay) {
-      const target = findScrollerWithin(overlay);
+      const target = findScrollerWithin(overlay, 1);
       if (!target) return { kind: "modal", fits: true };
       el = target;
       orig = { x: el.scrollLeft, y: el.scrollTop };
       el.scrollLeft = 0;
       el.scrollTop = 0;
-      const fits = el.scrollHeight <= el.clientHeight + 8 && el.scrollWidth <= el.clientWidth + 8;
+      const fits = el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth;
       return {
         kind: "modal",
         fits,

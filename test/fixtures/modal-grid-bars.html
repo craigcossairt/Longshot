@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Modal grid chrome</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #203040; }
+  #dialog { position: fixed; left: 100px; top: 80px; width: 400px; height: 300px; overflow: auto; scrollbar-width: none; }
+  #dialog::-webkit-scrollbar { display: none; }
+  .header { position: sticky; top: 0; width: 800px; height: 30px; background: #d24b40; }
+  .body { width: 800px; height: 640px; background: white; }
+  .footer { position: sticky; bottom: 0; width: 800px; height: 30px; background: #3456ab; }
+</style>
+<div id="dialog" role="dialog" aria-modal="true"><div class="header"></div><div class="body"></div><div class="footer"></div></div>
+</html>
