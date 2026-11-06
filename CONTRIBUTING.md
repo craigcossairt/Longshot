@@ -26,7 +26,8 @@ ignores `--load-extension`), so they need `npx playwright install chromium`.
 
 `npm run check:package` packs and installs the actual npm tarball in a temporary
 directory, then captures a local fixture through its installed entry point.
-It installs dependencies offline from the npm cache populated by `npm ci`.
+It prefers dependencies cached by `npm ci`, fetching registry metadata when a
+fresh runner needs it. The Playwright version stays pinned to the release lockfile.
 Use the extension Playwright harness for behavioral browser checks; no website
 dev server or app build is required. Save review screenshots in `screenshots/`.
 

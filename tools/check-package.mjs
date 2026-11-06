@@ -25,7 +25,7 @@ try {
   const playwrightVersion = lock.packages["node_modules/playwright"].version;
   // Use the release's tested dependency and installed browser revision rather
   // than whichever newer compatible version happens to be in the npm cache.
-  run([npmCli, "install", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", archive, `playwright@${playwrightVersion}`]);
+  run([npmCli, "install", "--prefer-offline", "--ignore-scripts", "--no-audit", "--no-fund", archive, `playwright@${playwrightVersion}`]);
   const installed = join(temp, "node_modules", "@craigcossairt", "longshot");
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
   assert.ok(existsSync(join(temp, "node_modules", ".bin", process.platform === "win32" ? "longshot.cmd" : "longshot")), "npm installs the longshot command");
