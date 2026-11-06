@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 
 export const REGION_GRID = 8;
@@ -77,31 +78,72 @@ export function compareVerdict(current, baseline) {
   return { divergesFromBaseline: reasons.length > 0, reasons };
 }
 
-export function compareToBaseline(current, rawText) {
+export function parseBaseline(rawText) {
   let baseline;
   try {
     baseline = JSON.parse(rawText);
   } catch {
-    return { divergesFromBaseline: true, reasons: ["baseline unreadable: invalid JSON"] };
+    return { error: "baseline unreadable: invalid JSON" };
   }
-  if (baseline === null || typeof baseline !== "object" || Array.isArray(baseline)) {
-    return { divergesFromBaseline: true, reasons: ["baseline unreadable: not a verdict object"] };
+  if (!baseline || typeof baseline !== "object" || Array.isArray(baseline) ||
+      !Number.isInteger(baseline.width) || baseline.width <= 0 ||
+      !Number.isInteger(baseline.height) || baseline.height <= 0 ||
+      !Number.isInteger(baseline.tiles) || baseline.tiles <= 0 ||
+      typeof baseline.format !== "string" || typeof baseline.engine !== "string" ||
+      baseline.grid !== REGION_GRID || !Array.isArray(baseline.regions) ||
+      baseline.regions.length !== REGION_GRID * REGION_GRID ||
+      baseline.regions.some((region) => typeof region !== "string" || !region)) {
+    return { error: "baseline unreadable: not a complete verdict object" };
   }
-  if (!("width" in baseline) && !("regions" in baseline) && !("sha256" in baseline)) {
-    return { divergesFromBaseline: true, reasons: ["baseline unreadable: not a verdict object"] };
+  return { baseline };
+}
+
+export function readBaselineFile(path) {
+  if (!existsSync(path)) return { error: `baseline missing: ${path}` };
+  try {
+    return parseBaseline(readFileSync(path, "utf8"));
+  } catch (error) {
+    return { error: `baseline unreadable: ${error.message}` };
   }
-  return compareVerdict(current, baseline);
+}
+
+export function compareToBaseline(current, rawText) {
+  const parsed = parseBaseline(rawText);
+  return parsed.error
+    ? { divergesFromBaseline: true, reasons: [parsed.error] }
+    : compareVerdict(current, parsed.baseline);
 }
 
 export function compareToBaselineFile(current, path) {
-  if (!existsSync(path)) {
-    return { divergesFromBaseline: true, reasons: [`baseline missing: ${path}`] };
+  const parsed = readBaselineFile(path);
+  return parsed.error
+    ? { divergesFromBaseline: true, reasons: [parsed.error] }
+    : compareVerdict(current, parsed.baseline);
+}
+
+export function assertBaselineSafeOutput(imagePath, baselinePath) {
+  if (!baselinePath) return;
+  const canonical = (path) => {
+    const resolved = existsSync(path) ? realpathSync(path) : resolve(path);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  const baseline = canonical(baselinePath);
+  const identity = (path) => {
+    try { return statSync(path, { bigint: true }); }
+    catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  };
+  const baselineStat = identity(baselinePath);
+  if ([imagePath, verdictPath(imagePath)].some((path) => {
+    if (canonical(path) === baseline) return true;
+    const target = identity(path);
+    if (!baselineStat || !target) return false;
+    // Some filesystems cannot identify hard links. An existing destination is
+    // indeterminate there, so refuse it instead of risking baseline bytes.
+    if (baselineStat.ino === 0n || target.ino === 0n) return true;
+    return baselineStat.dev === target.dev && baselineStat.ino === target.ino;
+  })) {
+    const error = new Error("Output would overwrite --baseline; choose a different --out path");
+    error.code = 2;
+    throw error;
   }
-  let raw;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch (error) {
-    return { divergesFromBaseline: true, reasons: [`baseline unreadable: ${error.message}`] };
-  }
-  return compareToBaseline(current, raw);
 }

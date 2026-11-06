@@ -37,7 +37,10 @@ function scrollInstant(x, y) {
   }
 }
 
+let scrollGeneration = 0;
+
 async function scrollToPos(x, y) {
+  const generation = scrollGeneration;
   const root = document.scrollingElement || document.documentElement;
   const maxX = Math.max(0, root.scrollWidth - window.innerWidth);
   const maxY = Math.max(0, root.scrollHeight - window.innerHeight);
@@ -46,6 +49,7 @@ async function scrollToPos(x, y) {
   for (let i = 0; i < 6; i++) {
     scrollInstant(tx, ty);
     await waitFrames(2);
+    if (generation !== scrollGeneration) break;
     if (Math.abs(window.scrollX - tx) < 1 && Math.abs(window.scrollY - ty) < 1) break;
   }
   return { x: window.scrollX, y: window.scrollY };
@@ -68,8 +72,8 @@ function dispatch(msg, sendResponse) {
     return;
   }
   if (msg.type === "LONGSHOT_HIDE_CHROME") {
-    globalThis.__longshotHide?.hide();
-    sendResponse({ ok: true });
+    const preserved = globalThis.__longshotHide?.hide(msg);
+    sendResponse({ ok: true, ...preserved });
     return;
   }
   if (msg.type === "LONGSHOT_SCROLL") {
@@ -81,6 +85,7 @@ function dispatch(msg, sendResponse) {
     return true;
   }
   if (msg.type === "LONGSHOT_RESET") {
+    scrollGeneration += 1;
     if (globalThis.__longshotOverflow?.active()) globalThis.__longshotOverflow.reset();
     else if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) scrollInstant(msg.x, msg.y);
     globalThis.__longshotHide?.reset();

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { chromium } from "playwright";
-import { REGION_GRID, sha256 } from "./verdict.mjs";
+import { REGION_GRID, assertBaselineSafeOutput, sha256 } from "./verdict.mjs";
 import {
   CANVAS_MAX_SIDE,
   CAPTURE_DELAYS,
@@ -79,7 +79,8 @@ async function withBrowser(options, fn) {
   try {
     return await fn(browser);
   } finally {
-    if (!options.cdp) await browser.close().catch(() => {});
+    // For connectOverCDP, close releases the connection; the external browser stays open.
+    await browser.close().catch(() => {});
   }
 }
 
@@ -93,10 +94,15 @@ async function openPage(browser, options) {
       });
   // Over --cdp, open a fresh tab rather than navigating one the user already has open.
   const page = await context.newPage();
-  if (options.cdp) {
-    await page.setViewportSize({ width: options.viewport.width, height: options.viewport.height });
+  try {
+    if (options.cdp) {
+      await page.setViewportSize({ width: options.viewport.width, height: options.viewport.height });
+    }
+    return page;
+  } catch (error) {
+    await page.close().catch(() => {});
+    throw error;
   }
-  return page;
 }
 
 async function preparePage(page, options) {
@@ -107,7 +113,17 @@ async function preparePage(page, options) {
     if (Number.isFinite(ms)) await page.waitForTimeout(ms);
     else await page.waitForSelector(options.wait, { timeout: 60000 });
   }
-  await page.addStyleTag({ content: CAPTURE_CSS });
+  // Inspector styles work with strict page CSP without disabling that CSP.
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("DOM.enable");
+    await session.send("CSS.enable");
+    const { frameTree } = await session.send("Page.getFrameTree");
+    const { styleSheetId } = await session.send("CSS.createStyleSheet", { frameId: frameTree.frame.id });
+    await session.send("CSS.setStyleSheetText", { styleSheetId, text: CAPTURE_CSS });
+  } finally {
+    await session.detach();
+  }
   await page.evaluate(installHideSession, HIDE_POLICY);
   await page.evaluate(bindOverflowCapture, OVERFLOW_POLICY);
 }
@@ -135,51 +151,116 @@ async function captureViewportPng(page) {
   return bufToDataUrl(buf);
 }
 
-async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings) {
+async function encodeInPage(page, shots, { fullW, fullH, dpr }, settings, place = null) {
   const payload = shots.map((shot) => ({
     x: shot.x,
     y: shot.y,
+    bottomRects: shot.bottomRects || [],
     bytes: dataUrlToBytes(shot.dataUrl),
   }));
   const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
+  const outputW = place ? place.width + Math.max(0, fullW * dpr - place.crop.w * dpr) : fullW * dpr;
+  const outputH = place ? place.height + Math.max(0, fullH * dpr - place.crop.h * dpr) : fullH * dpr;
+  const scale = limitScale(outputW, outputH, settings, place ? (s) => {
+    const k = dpr * s;
+    return {
+      width: Math.max(1, Math.round(place.width * s)) + Math.max(0, Math.max(1, Math.round(fullW * k)) - Math.round(place.crop.w * k)),
+      height: Math.max(1, Math.round(place.height * s)) + Math.max(0, Math.max(1, Math.round(fullH * k)) - Math.round(place.crop.h * k)),
+    };
+  } : undefined);
   const raw = await page.evaluate(
-    async ({ shots, geom, mime, quality }) => {
-      // Same scaling as extension/core/stitch.js: never allocate the full-size canvas.
+    async ({ shots, geom, mime, quality, place }) => {
+      // Scale before allocating, including the surrounding viewport of a modal.
       const k = geom.dpr * geom.scale;
-      const out = new OffscreenCanvas(
+      const canvas = new OffscreenCanvas(
         Math.max(1, Math.round(geom.fullW * k)),
         Math.max(1, Math.round(geom.fullH * k)),
       );
-      const ctx = out.getContext("2d");
-      if (geom.scale !== 1) {
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
-      }
-      for (const shot of shots) {
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      for (let i = shots.length - 1; i >= 0; i--) {
+        const shot = shots[i];
         const bmp = await createImageBitmap(new Blob([shot.bytes], { type: "image/png" }));
-        if (geom.scale === 1) {
-          ctx.drawImage(bmp, Math.round(shot.x * geom.dpr), Math.round(shot.y * geom.dpr));
-          continue;
-        }
         const x0 = Math.round(shot.x * k);
         const y0 = Math.round(shot.y * k);
         const x1 = Math.round((shot.x * geom.dpr + bmp.width) * geom.scale);
         const y1 = Math.round((shot.y * geom.dpr + bmp.height) * geom.scale);
         ctx.drawImage(bmp, x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
+        bmp.close();
+      }
+      // The last tile's footer must paint over the preceding tile's overlap.
+      for (const shot of shots) {
+        if (!shot.bottomRects.length) continue;
+        const bmp = await createImageBitmap(new Blob([shot.bytes], { type: "image/png" }));
+        for (const rect of shot.bottomRects) {
+          const sx = Math.max(0, Math.round(rect.x * geom.dpr));
+          const sy = Math.max(0, Math.round(rect.y * geom.dpr));
+          const right = Math.min(bmp.width, Math.round((rect.x + rect.w) * geom.dpr));
+          const bottom = Math.min(bmp.height, Math.round((rect.y + rect.h) * geom.dpr));
+          if (right <= sx || bottom <= sy) continue;
+          const x0 = Math.round((shot.x * geom.dpr + sx) * geom.scale);
+          const y0 = Math.round((shot.y * geom.dpr + sy) * geom.scale);
+          const x1 = Math.round((shot.x * geom.dpr + right) * geom.scale);
+          const y1 = Math.round((shot.y * geom.dpr + bottom) * geom.scale);
+          if (x1 > x0 && y1 > y0) ctx.drawImage(bmp, sx, sy, right - sx, bottom - sy,
+            x0, y0, x1 - x0, y1 - y0);
+        }
+        bmp.close();
+      }
+      let out = canvas;
+      if (place?.base && place.crop) {
+        const baseBmp = await createImageBitmap(new Blob([place.base], { type: "image/png" }));
+        let baseW = Math.max(1, Math.round(baseBmp.width * geom.scale));
+        const baseH = Math.max(1, Math.round(baseBmp.height * geom.scale));
+        const extraW = Math.max(0, canvas.width - Math.round(place.crop.w * k));
+        const base = new OffscreenCanvas(baseW + extraW, baseH);
+        const bctx = base.getContext("2d");
+        bctx.drawImage(baseBmp, 0, 0, baseW, baseH);
+        if (extraW > 0) {
+          const cut = Math.min(baseW, Math.max(0, Math.round((place.crop.x + place.crop.w) * k)));
+          const sampleY = Math.max(0, Math.min(baseH - 1, Math.round(place.crop.y * k) + 2));
+          const left = Math.round(place.crop.x * k) - 2;
+          const right = Math.round((place.crop.x + place.crop.w) * k) + 2;
+          const pixel = bctx.getImageData(left >= 0 ? left : right < baseW ? right : 0, sampleY, 1, 1).data;
+          bctx.fillStyle = `rgba(${pixel[0]}, ${pixel[1]}, ${pixel[2]}, ${pixel[3] / 255})`;
+          bctx.fillRect(cut, 0, extraW, baseH);
+          if (baseW > cut) bctx.drawImage(baseBmp, cut / geom.scale, 0, (baseW - cut) / geom.scale, baseBmp.height,
+            cut + extraW, 0, baseW - cut, baseH);
+          baseW += extraW;
+        }
+        const extra = Math.max(0, canvas.height - Math.round(place.crop.h * k));
+        const merged = new OffscreenCanvas(baseW, baseH + extra);
+        const mctx = merged.getContext("2d");
+        mctx.drawImage(base, 0, 0);
+        if (extra > 0) {
+          const cut = Math.min(baseH, Math.max(0, Math.round((place.crop.y + place.crop.h) * k)));
+          const sampleY = Math.max(0, Math.min(baseH - 1, Math.round(place.crop.y * k) + 2));
+          const left = Math.round(place.crop.x * k) - 2;
+          const right = Math.round((place.crop.x + place.crop.w) * k) + 2;
+          const sampleX = left >= 0 ? left : right < baseW ? right : 0;
+          const pixel = mctx.getImageData(sampleX, sampleY, 1, 1).data;
+          mctx.fillStyle = `rgba(${pixel[0]}, ${pixel[1]}, ${pixel[2]}, ${pixel[3] / 255})`;
+          mctx.fillRect(0, cut, merged.width, extra);
+          const below = baseH - cut;
+          if (below > 0) {
+            mctx.drawImage(base, 0, cut, baseW, below,
+              0, cut + extra, baseW, below);
+          }
+        }
+        mctx.drawImage(canvas, Math.round(place.crop.x * k), Math.round(place.crop.y * k));
+        baseBmp.close();
+        out = merged;
       }
       const blob = await out.convertToBlob({ type: mime, quality });
-      return {
-        data: new Uint8Array(await blob.arrayBuffer()),
-        type: blob.type,
-        width: out.width,
-        height: out.height,
-      };
+      return { data: new Uint8Array(await blob.arrayBuffer()), type: blob.type, width: out.width, height: out.height };
     },
     {
       shots: payload,
-      geom: { fullW, fullH, dpr, scale: limitScale(fullW * dpr, fullH * dpr, settings) },
+      geom: { fullW, fullH, dpr, scale },
       mime,
       quality: usesQuality(settings.format === "pdf" ? "jpeg" : settings.format) ? settings.quality : 1,
+      place,
     },
   );
   return encodedResult(raw, mime);
@@ -210,44 +291,34 @@ async function reencodeEncoded(page, encoded, { width, height, mime, quality }) 
 
 async function applyByteBudget(page, encoded, settings) {
   if (!settings.maxFileMB) return encoded;
-  const mime = settings.format === "pdf" ? "image/jpeg" : mimeFor(settings.format);
+  const outputSize = (image) => settings.outputIsPdf
+    ? jpegToPdfBlob(image.data, image.width, image.height, settings.pdfTitle).size
+    : image.data.byteLength;
+  if (outputSize(encoded) <= settings.maxFileMB * 1024 * 1024) return encoded;
   const useQ = usesQuality(settings.format === "pdf" ? "jpeg" : settings.format);
   const cache = new Map();
-  let last = encoded;
-  const fake = {
-    width: encoded.width,
-    height: encoded.height,
-    getContext() {
-      return { imageSmoothingEnabled: true, drawImage() {} };
-    },
-  };
-  await fitFileSize(fake, settings, {
-    createCanvas: (w, h) => ({
-      width: w,
-      height: h,
-      getContext() {
-        return { imageSmoothingEnabled: true, drawImage() {} };
-      },
-    }),
+  const fakeCanvas = (width, height) => ({
+    width, height,
+    getContext: () => ({ imageSmoothingEnabled: true, drawImage() {} }),
+  });
+  const fitted = await fitFileSize(fakeCanvas(encoded.width, encoded.height), settings, {
+    createCanvas: fakeCanvas,
     encode: async (canvas, { type, quality }) => {
       const q = useQ ? quality : 1;
       const key = `${canvas.width}x${canvas.height}:${q}:${type}`;
-      if (cache.has(key)) {
-        last = cache.get(key);
-        return { size: last.data.byteLength };
+      if (!cache.has(key)) {
+        const next = await reencodeEncoded(page, encoded, {
+          width: canvas.width, height: canvas.height, mime: type, quality: q,
+        });
+        cache.set(key, { ...next, size: outputSize(next) });
       }
-      const next = await reencodeEncoded(page, encoded, {
-        width: canvas.width,
-        height: canvas.height,
-        mime: type,
-        quality: q,
-      });
-      cache.set(key, next);
-      last = next;
-      return { size: next.data.byteLength };
+      return cache.get(key);
     },
   });
-  return last;
+  if (!fitted.fits) {
+    throw new Error(`Cannot meet --max-bytes (${Math.floor(settings.maxFileMB * 1024 * 1024)}); smallest encoded ${settings.outputIsPdf ? "PDF" : "image"} is ${fitted.encoded.size} bytes`);
+  }
+  return fitted.encoded;
 }
 
 function delay(ms) {
@@ -270,7 +341,21 @@ async function tiledFullPage(page, settings, options) {
       }
     : dim;
   let lastCrop = overflow?.crop || null;
-  if (overflow) {
+  if (overflow?.kind === "modal" && overflow.fits) {
+    progress("Modal fits the viewport");
+    try {
+      const buf = await page.screenshot({ type: "png", fullPage: false, animations: "disabled" });
+      const encoded = await reencodePng(page, buf, settings);
+      return { encoded, dim, tiles: 1 };
+    } finally {
+      await page.evaluate(() => globalThis.__longshotOverflow?.reset());
+    }
+  }
+  let modalBase = null;
+  if (overflow?.kind === "modal") {
+    progress(`Modal ${overflow.clientWidth}×${overflow.scrollHeight}`);
+    modalBase = await page.screenshot({ type: "png", fullPage: false, animations: "disabled" });
+  } else if (overflow) {
     progress(`Overflow pane ${overflow.scrollWidth}×${overflow.scrollHeight}`);
   } else {
     progress(`Page ${dim.scrollWidth}×${dim.scrollHeight} @ ${dim.devicePixelRatio}x`);
@@ -301,8 +386,24 @@ async function tiledFullPage(page, settings, options) {
         return { x: window.scrollX, y: window.scrollY };
       }, { x, y });
     },
-    hideChrome: async () => {
-      await page.evaluate(() => globalThis.__longshotHide?.hide());
+    hideChrome: async (opts) => {
+      const anchor = lastCrop?.w ? { x: lastCrop.x, y: lastCrop.y, w: lastCrop.w, h: lastCrop.h } : null;
+      const hidden = await page.evaluate(
+        (payload) => globalThis.__longshotHide?.hide(payload),
+        {
+          top: opts?.top !== false,
+          bottom: opts?.bottom !== false,
+          barsOnly: overflow?.kind === "modal",
+          anchor,
+        },
+      );
+      if (!lastCrop) return hidden;
+      return { bottomRects: (hidden?.bottomRects || []).map((rect) => {
+        const x = Math.max(0, rect.x - lastCrop.x);
+        const y = Math.max(0, rect.y - lastCrop.y);
+        return { x, y, w: Math.min(lastCrop.w, rect.x + rect.w - lastCrop.x) - x,
+          h: Math.min(lastCrop.h, rect.y + rect.h - lastCrop.y) - y };
+      }).filter((rect) => rect.w > 0 && rect.h > 0) };
     },
     reset: async (orig) => {
       await page.evaluate(({ x, y, usedOverflow }) => {
@@ -332,7 +433,11 @@ async function tiledFullPage(page, settings, options) {
   });
   progress("Stitching");
   const dpr = dim.devicePixelRatio || 1;
-  let encoded = await encodeInPage(page, result.shots, { fullW: result.fullW, fullH: result.fullH, dpr }, settings);
+  const place = modalBase
+    ? { base: new Uint8Array(modalBase), crop: overflow.crop, dpr,
+        width: modalBase.readUInt32BE(16), height: modalBase.readUInt32BE(20) }
+    : null;
+  let encoded = await encodeInPage(page, result.shots, { fullW: result.fullW, fullH: result.fullH, dpr }, settings, place);
   encoded = await applyByteBudget(page, encoded, settings);
   return { encoded, dim: captureDim, tiles: result.tiles };
 }
@@ -460,6 +565,7 @@ function settingsFromOptions(options) {
   return {
     ...DEFAULTS,
     format,
+    outputIsPdf: options.format === "pdf",
     quality: DEFAULTS.quality,
     maxFileMB: options.maxBytes ? options.maxBytes / (1024 * 1024) : 0,
     downloadDirectory: "Longshot",
@@ -478,12 +584,16 @@ async function writeOutput(options, encoded, dim, settings) {
   };
   const leaf = filename(record, settings).split("/").pop();
   const target = uniquePath(resolve(options.out || leaf), existsSync);
-  mkdirSync(dirname(target), { recursive: true });
+  assertBaselineSafeOutput(target, options.baseline);
   let body = Buffer.from(encoded.data);
   if (options.format === "pdf") {
     const pdf = jpegToPdfBlob(body, encoded.width, encoded.height, dim.title);
     body = Buffer.from(await pdf.arrayBuffer());
   }
+  if (options.maxBytes && body.length > options.maxBytes) {
+    throw new Error(`Cannot meet --max-bytes (${options.maxBytes}); final ${record.format} is ${body.length} bytes`);
+  }
+  mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, body);
   return {
     path: target,
@@ -507,6 +617,7 @@ export async function capture(options) {
 }
 
 async function captureOnPage(page, options, settings) {
+  if (settings.outputIsPdf) settings = { ...settings, pdfTitle: await page.title() || "Page" };
   let result;
   if (options.selector) result = await selectorCapture(page, options, settings);
   else if (options.region) result = await regionCapture(page, options, settings);

@@ -39,15 +39,22 @@ export async function runTiledCapture({
         if (mode === "full") {
           const pos = await scroll(x, y);
           await delay(delays.afterScroll);
-          if (index > 1) {
-            await hideChrome();
+          const firstRow = y === ys[0];
+          const lastRow = y === ys[ys.length - 1];
+          // A sticky footer is in the first viewport too. Leaving it there stamps
+          // it over the content it covered, and the last tile still has the real one.
+          let preserved;
+          if (total > 1) {
+            preserved = await hideChrome({ top: !firstRow, bottom: !lastRow });
             await delay(delays.afterHide);
           }
           const ax = Math.round(pos?.x ?? x);
           const ay = Math.round(pos?.y ?? y);
-          if (shots.some((shot) => shot.x === ax && shot.y === ay)) continue;
+          // The bottom row reveals footer chrome hidden in earlier frames, even
+          // if scrolling clamped to a position we already captured.
+          if (!lastRow && shots.some((shot) => shot.x === ax && shot.y === ay)) continue;
           const dataUrl = await captureTile();
-          shots.push({ x: ax, y: ay, dataUrl });
+          shots.push({ x: ax, y: ay, dataUrl, ...(preserved?.bottomRects?.length ? { bottomRects: preserved.bottomRects } : {}) });
         } else {
           const dataUrl = await captureTile();
           shots.push({ x: 0, y: 0, dataUrl });
@@ -62,5 +69,19 @@ export async function runTiledCapture({
     }
   }
   if (!shots.length) throw new Error("Capture produced no frames");
-  return { shots, dim, fullW, fullH, tiles: shots.length };
+  // scrollWidth can be larger than any position the page will actually scroll
+  // to (a modal lock, or a 100vw child). Size the canvas to the tiles we have.
+  let coveredW = 0;
+  let coveredH = 0;
+  for (const shot of shots) {
+    coveredW = Math.max(coveredW, shot.x + dim.viewportWidth);
+    coveredH = Math.max(coveredH, shot.y + dim.viewportHeight);
+  }
+  return {
+    shots,
+    dim,
+    fullW: Math.min(fullW, Math.max(coveredW, dim.viewportWidth)),
+    fullH: Math.min(fullH, Math.max(coveredH, dim.viewportHeight)),
+    tiles: shots.length,
+  };
 }

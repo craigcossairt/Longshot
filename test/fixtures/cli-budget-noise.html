@@ -1,0 +1,13 @@
+<!doctype html><html><head><title>Lossy budget fixture</title></head><body style="margin:0">
+<canvas width="200" height="200"></canvas>
+<script>
+  const ctx = document.querySelector('canvas').getContext('2d');
+  const image = ctx.createImageData(200, 200);
+  let seed = 42;
+  for (let i = 0; i < image.data.length; i += 4) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    image.data[i] = seed & 255; image.data[i + 1] = seed >>> 8 & 255;
+    image.data[i + 2] = seed >>> 16 & 255; image.data[i + 3] = 255;
+  }
+  ctx.putImageData(image, 0, 0);
+</script></body></html>

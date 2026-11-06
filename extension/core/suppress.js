@@ -5,23 +5,111 @@ export const HIDE_POLICY = {
   topMin: -8,
   topMax: 96,
   minZIndex: 1,
+  sidebarHeightRatio: 0.7,
+  sidebarWidthRatio: 0.45,
+  overlayAreaRatio: 0.6,
+  edgePx: 8,
+  // Sticky footers inside a dialog sit a few pixels above the scrollport edge.
+  bottomSlack: 24,
 };
 
-export function shouldHide(desc, policy = HIDE_POLICY) {
-  if (desc.isRoot || desc.id === "longshot-capture-style") return false;
+/**
+ * fixed/sticky roles that must not be treated as a repeating header.
+ * sidebar: full-height side nav. It has to stay in every tile or the
+ *   overlap of the last tile erases it.
+ * overlay: a modal backdrop covering the viewport. Hiding it reveals the
+ *   page underneath and the stitch composites the two states together.
+ */
+function rectBox(rect) {
+  const left = rect.left || 0;
+  const top = rect.top || 0;
+  const width = rect.width || 0;
+  const height = rect.height || 0;
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: rect.right == null ? left + width : rect.right,
+    bottom: rect.bottom == null ? top + height : rect.bottom,
+  };
+}
+
+function anchorBox(anchor) {
+  if (!anchor) return null;
+  const left = anchor.left ?? anchor.x ?? 0;
+  const top = anchor.top ?? anchor.y ?? 0;
+  const width = anchor.width ?? anchor.w ?? 0;
+  const height = anchor.height ?? anchor.h ?? 0;
+  if (width < 8 || height < 8) return null;
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: anchor.right == null ? left + width : anchor.right,
+    bottom: anchor.bottom == null ? top + height : anchor.bottom,
+  };
+}
+
+function wideShort(box, frame, policy) {
+  return box.width > frame.width * policy.widthRatio && box.height > policy.minHeight && box.height < policy.maxHeight;
+}
+
+function onTop(box, frame, policy) {
+  return box.top >= frame.top + policy.topMin && box.top < frame.top + policy.topMax;
+}
+
+function onBottom(box, frame, policy) {
+  const slack = policy.bottomSlack ?? policy.edgePx;
+  return box.top > frame.top + frame.height * 0.5 && box.bottom >= frame.bottom - slack;
+}
+
+export function chromeKind(desc, policy = HIDE_POLICY) {
   const pos = desc.position;
-  if (pos === "fixed" || pos === "sticky") return true;
-  if (pos !== "absolute") return false;
-  const rect = desc.rect || {};
+  const box = rectBox(desc.rect || {});
+  const vw = desc.viewportWidth || 1;
+  const vh = desc.viewportHeight || vw;
+  const frames = [{ left: 0, top: 0, width: vw, height: vh, right: vw, bottom: vh }];
+  const anchor = anchorBox(desc.anchor);
+  if (anchor) frames.push(anchor);
+  if (pos === "fixed" || pos === "sticky") {
+    const side =
+      box.height >= vh * policy.sidebarHeightRatio &&
+      box.width > 0 &&
+      box.width <= vw * policy.sidebarWidthRatio &&
+      (box.left <= policy.edgePx || box.right >= vw - policy.edgePx);
+    if (side) return "sidebar";
+    const covers =
+      pos === "fixed" &&
+      box.width >= vw * 0.7 &&
+      box.height >= vh * 0.7 &&
+      box.width * box.height >= vw * vh * policy.overlayAreaRatio;
+    if (covers) return "overlay";
+    if (frames.some((frame) => wideShort(box, frame, policy) && onBottom(box, frame, policy))) return "bottombar";
+    if (frames.some((frame) => wideShort(box, frame, policy) && onTop(box, frame, policy))) return "topbar";
+    return "fixed";
+  }
+  // Absolute positioning does not imply repeating chrome. Its containing
+  // structure must pin it outside the captured scrolling content.
+  if (pos !== "absolute" || !desc.viewportPinned) return null;
   const z = Number(desc.zIndex);
-  const vw = desc.viewportWidth;
-  const topBar =
-    rect.height > policy.minHeight &&
-    rect.height < policy.maxHeight &&
-    rect.width > vw * policy.widthRatio &&
-    rect.top >= policy.topMin &&
-    rect.top < policy.topMax;
-  return Boolean(topBar && Number.isFinite(z) && z > policy.minZIndex);
+  const raised = Number.isFinite(z) && z > policy.minZIndex;
+  if (frames.some((frame) => wideShort(box, frame, policy) && onBottom(box, frame, policy))) return "bottombar";
+  if (raised && frames.some((frame) => wideShort(box, frame, policy) && onTop(box, frame, policy))) return "absolute-top";
+  return null;
+}
+
+export function shouldHide(desc, policy = HIDE_POLICY, opts = {}) {
+  if (desc.isRoot || desc.id === "longshot-capture-style") return false;
+  const hideTop = opts.top !== false;
+  const hideBottom = opts.bottom !== false;
+  const kind = chromeKind(desc, policy);
+  if (kind === "sidebar" || kind === "overlay" || !kind) return false;
+  if (kind === "bottombar") return hideBottom;
+  // A modal shell is position:fixed and must stay up. Only its pinned bars repeat.
+  if (opts.barsOnly && kind === "fixed") return false;
+  return hideTop;
 }
 
 /**
@@ -36,6 +124,11 @@ export function installHideSession(policy) {
     topMin: -8,
     topMax: 96,
     minZIndex: 1,
+    sidebarHeightRatio: 0.7,
+    sidebarWidthRatio: 0.45,
+    overlayAreaRatio: 0.6,
+    edgePx: 8,
+    bottomSlack: 24,
   };
   if (globalThis.__longshotHide) return;
   const restores = [];
@@ -54,24 +147,96 @@ export function installHideSession(policy) {
     });
   }
 
-  function hideable(el, style, vw) {
-    const pos = style.position;
-    if (pos === "fixed" || pos === "sticky") return true;
-    if (pos !== "absolute") return false;
-    const rect = el.getBoundingClientRect();
-    const z = Number(style.zIndex);
-    const topBar =
-      rect.height > p.minHeight &&
-      rect.height < p.maxHeight &&
-      rect.width > vw * p.widthRatio &&
-      rect.top >= p.topMin &&
-      rect.top < p.topMax;
-    return Boolean(topBar && Number.isFinite(z) && z > p.minZIndex);
+  function frameOf(anchor, vw, vh) {
+    const frames = [{ left: 0, top: 0, width: vw, height: vh, right: vw, bottom: vh }];
+    if (!anchor) return frames;
+    const left = anchor.left ?? anchor.x ?? 0;
+    const top = anchor.top ?? anchor.y ?? 0;
+    const width = anchor.width ?? anchor.w ?? 0;
+    const height = anchor.height ?? anchor.h ?? 0;
+    if (width < 8 || height < 8) return frames;
+    frames.push({
+      left,
+      top,
+      width,
+      height,
+      right: anchor.right == null ? left + width : anchor.right,
+      bottom: anchor.bottom == null ? top + height : anchor.bottom,
+    });
+    return frames;
   }
 
-  function hideFloating(root) {
+  function matches(box, frames, where) {
+    const slack = p.bottomSlack == null ? p.edgePx : p.bottomSlack;
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i];
+      const wide = box.width > frame.width * p.widthRatio && box.height > p.minHeight && box.height < p.maxHeight;
+      if (!wide) continue;
+      if (where === "bottom" && box.top > frame.top + frame.height * 0.5 && box.bottom >= frame.bottom - slack) return true;
+      if (where === "top" && box.top >= frame.top + p.topMin && box.top < frame.top + p.topMax) return true;
+    }
+    return false;
+  }
+
+  function absolutePinned(el, view) {
+    for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+      const style = view.getComputedStyle(parent);
+      const scrolls = (parent.scrollHeight > parent.clientHeight + 1 && /(auto|scroll|overlay|hidden)/.test(style.overflowY)) ||
+        (parent.scrollWidth > parent.clientWidth + 1 && /(auto|scroll|overlay|hidden)/.test(style.overflowX));
+      if (scrolls) return false;
+      if (style.position === "fixed" || style.position === "sticky") return true;
+    }
+    return false;
+  }
+
+  function hideable(el, style, vw, vh, opts, view) {
+    const pos = style.position;
+    const rect = el.getBoundingClientRect();
+    const left = rect.left || 0;
+    const top = rect.top || 0;
+    const width = rect.width || 0;
+    const height = rect.height || 0;
+    const box = {
+      left,
+      top,
+      width,
+      height,
+      right: rect.right == null ? left + width : rect.right,
+      bottom: rect.bottom == null ? top + height : rect.bottom,
+    };
+    const hideTop = !opts || opts.top !== false;
+    const hideBottom = !opts || opts.bottom !== false;
+    const barsOnly = Boolean(opts && opts.barsOnly);
+    const frames = frameOf(opts && opts.anchor, vw, vh);
+    if (pos === "fixed" || pos === "sticky") {
+      const side =
+        height >= vh * p.sidebarHeightRatio &&
+        width > 0 &&
+        width <= vw * p.sidebarWidthRatio &&
+        (left <= p.edgePx || box.right >= vw - p.edgePx);
+      if (side) return false;
+      const covers =
+        pos === "fixed" &&
+        width >= vw * 0.7 &&
+        height >= vh * 0.7 &&
+        width * height >= vw * vh * p.overlayAreaRatio;
+      if (covers) return false;
+      if (matches(box, frames, "bottom")) return hideBottom;
+      if (matches(box, frames, "top")) return hideTop;
+      if (barsOnly) return false;
+      return hideTop;
+    }
+    if (pos !== "absolute" || !absolutePinned(el, view)) return false;
+    if (matches(box, frames, "bottom")) return hideBottom;
+    if (!hideTop) return false;
+    const z = Number(style.zIndex);
+    return Boolean(matches(box, frames, "top") && Number.isFinite(z) && z > p.minZIndex);
+  }
+
+  function hideFloating(root, opts, bottomRects = [], offset = { x: 0, y: 0 }) {
     const view = root.defaultView || globalThis;
     const vw = view.innerWidth || globalThis.innerWidth;
+    const vh = view.innerHeight || globalThis.innerHeight || vw;
     let nodes;
     try {
       nodes = root.querySelectorAll("*");
@@ -90,11 +255,20 @@ export function installHideSession(policy) {
       } catch {
         return;
       }
-      if (hideable(el, style, vw)) hideElement(el);
+      if (hideable(el, style, vw, vh, opts, view)) hideElement(el);
+      else if (opts?.bottom === false && style.visibility !== "hidden" && style.visibility !== "collapse" && Number(style.opacity) !== 0 &&
+        hideable(el, style, vw, vh, { ...opts, top: false, bottom: true }, view)) {
+        const r = el.getBoundingClientRect();
+        bottomRects.push({ x: r.left + offset.x, y: r.top + offset.y, w: r.width, h: r.height });
+      }
     });
     root.querySelectorAll("iframe, frame").forEach((frame) => {
       try {
-        if (frame.contentDocument) hideFloating(frame.contentDocument);
+        if (frame.contentDocument) {
+          const nested = { top: opts && opts.top, bottom: opts && opts.bottom, barsOnly: opts && opts.barsOnly };
+          const r = frame.getBoundingClientRect();
+          hideFloating(frame.contentDocument, nested, bottomRects, { x: offset.x + r.left + frame.clientLeft, y: offset.y + r.top + frame.clientTop });
+        }
       } catch {
         /* cross-origin */
       }
@@ -102,8 +276,11 @@ export function installHideSession(policy) {
   }
 
   globalThis.__longshotHide = {
-    hide() {
-      hideFloating(globalThis.document);
+    hide(opts) {
+      while (restores.length) restores.pop()();
+      const bottomRects = [];
+      hideFloating(globalThis.document, opts, bottomRects);
+      return { bottomRects };
     },
     reset() {
       while (restores.length) restores.pop()();

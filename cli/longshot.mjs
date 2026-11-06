@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 import { EXIT, helpText, parseArgs } from "./args.mjs";
-import { buildVerdict, compareToBaselineFile, verdictPath } from "./verdict.mjs";
+import { buildVerdict, compareVerdict, readBaselineFile, verdictPath } from "./verdict.mjs";
 
 function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -21,13 +21,16 @@ if (parsed.options.help) {
 
 const started = Date.now();
 try {
+  // Read once before capture can write either the image or its sidecar.
+  const previous = parsed.options.baseline ? readBaselineFile(parsed.options.baseline) : null;
+  if (previous?.error) fail(EXIT.DIFF, previous.error, { reasons: [previous.error] });
   const { capture } = await import("./playwright-adapter.mjs");
   const result = await capture(parsed.options);
   const verdict = buildVerdict(result);
   const verdictFile = verdictPath(result.path);
   writeFileSync(verdictFile, `${JSON.stringify(verdict, null, 2)}\n`);
   if (parsed.options.baseline) {
-    const cmp = compareToBaselineFile(verdict, parsed.options.baseline);
+    const cmp = compareVerdict(verdict, previous.baseline);
     if (cmp.divergesFromBaseline) {
       fail(EXIT.DIFF, "differs from baseline", {
         reasons: cmp.reasons,

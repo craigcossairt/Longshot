@@ -2,7 +2,8 @@ import {
   longshotByteSize,
   longshotFormatBytes,
   longshotHistoryDelete,
-  longshotHistoryGetAll,
+  longshotHistoryList,
+  longshotHistoryGet,
 } from "./history.js";
 import { exportCapture } from "./export.js";
 
@@ -15,6 +16,7 @@ const deleteBtn = document.getElementById("deleteBtn");
 
 let items = [];
 const selected = new Set();
+count.setAttribute("role", "status");
 
 function isHttp(url) {
   return /^https?:/i.test(url || "");
@@ -115,12 +117,15 @@ selectAll.addEventListener("change", () => {
 downloadBtn.addEventListener("click", async () => {
   const chosen = items.filter((item) => selected.has(item.id));
   const failed = [];
-  for (const item of chosen) {
+  for (const chosenItem of chosen) {
     try {
+      const item = await longshotHistoryGet(chosenItem.id);
+      if (!item) throw new Error("This capture was deleted in another tab.");
       const blob = await (await fetch(item.dataUrl)).blob();
-      await exportCapture(blob, item, "image");
+      const format = blob.type === "image/jpeg" ? "jpeg" : blob.type === "image/webp" ? "webp" : blob.type === "image/avif" ? "avif" : "png";
+      await exportCapture(blob, { ...item, format }, "image");
     } catch (error) {
-      failed.push(`${item.title || "Capture"}: ${error?.message || error}`);
+      failed.push(`${chosenItem.title || "Capture"}: ${error?.message || error}`);
     }
   }
   if (failed.length) alert(`Could not download:\n${failed.join("\n")}`);
@@ -128,13 +133,20 @@ downloadBtn.addEventListener("click", async () => {
 
 deleteBtn.addEventListener("click", async () => {
   const ids = [...selected];
-  await longshotHistoryDelete(ids);
-  items = items.filter((item) => !selected.has(item.id));
-  selected.clear();
-  render();
+  try {
+    await longshotHistoryDelete(ids);
+    ids.forEach((id) => selected.delete(id));
+    await refresh();
+  } catch (error) { count.textContent = `Could not delete: ${error.message}`; }
 });
 
-longshotHistoryGetAll().then((list) => {
-  items = list;
+async function refresh() {
+  items = await longshotHistoryList();
+  const ids = new Set(items.map((item) => item.id));
+  for (const id of selected) if (!ids.has(id)) selected.delete(id);
   render();
+}
+window.addEventListener("focus", () => {
+  void refresh().catch((error) => { count.textContent = `Could not load captures: ${error.message}`; });
 });
+void refresh().catch((error) => { count.textContent = `Could not load captures: ${error.message}`; });

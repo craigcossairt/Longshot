@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sidebar fixture</title>
+    <style>
+      html, body { margin: 0; background: #2c2a26; }
+      aside {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 200px;
+        background: #c4554a;
+      }
+      main { margin-left: 200px; }
+      .end { height: 120px; background: #3d6ea8; }
+      .fill { height: 1380px; background: #2c2a26; }
+    </style>
+  </head>
+  <body>
+    <aside id="nav"></aside>
+    <main>
+      <div class="fill"></div>
+      <div class="end" id="end"></div>
+    </main>
+  </body>
+</html>

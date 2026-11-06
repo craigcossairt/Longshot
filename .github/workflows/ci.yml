@@ -32,3 +32,5 @@ jobs:
         run: node --test test/extension/*.test.mjs
       - name: Manifest and package
         run: node tools/pack-extension.mjs artifacts/longshot-extension.zip
+      - name: Installed npm package
+        run: npm run check:package

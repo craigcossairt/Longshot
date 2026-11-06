@@ -26,8 +26,8 @@ describe("stitch", () => {
     assert.equal(canvases.length, 1);
     assert.deepEqual([out.width, out.height], [200, 200]);
     assert.deepEqual(out.draws, [
-      [0, 0],
       [0, 100],
+      [0, 0],
     ]);
   });
 
@@ -37,8 +37,8 @@ describe("stitch", () => {
     assert.equal(canvases.length, 1);
     assert.deepEqual([out.width, out.height], [100, 100]);
     assert.deepEqual(out.draws, [
-      [0, 0, 100, 50],
       [0, 50, 100, 50],
+      [0, 0, 100, 50],
     ]);
   });
 });

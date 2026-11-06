@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Modal fixture</title>
+    <style>
+      html, body { margin: 0; background: #224466; }
+      .page { height: 2400px; }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: #203040;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .dialog {
+        width: 400px;
+        max-height: 70vh;
+        overflow: auto;
+        background: #f4f1ea;
+      }
+      .row { height: 80px; }
+      .row.first { background: #d24b40; }
+      .row.last { background: #2f6f4f; }
+    </style>
+  </head>
+  <body>
+    <div class="page"></div>
+    <div class="backdrop">
+      <div class="dialog" id="dialog">
+        <div class="row first"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row last"></div>
+      </div>
+    </div>
+  </body>
+</html>

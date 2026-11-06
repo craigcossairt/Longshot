@@ -17,7 +17,27 @@ function dimFor({ scrollWidth, scrollHeight, vw, vh }) {
 }
 
 describe("runTiledCapture", () => {
-  it("hides chrome from tile 2 onward and uses actual scroll positions", async () => {
+  it("preserves headers across the top row and footers across a clamped bottom row", async () => {
+    const hides = [];
+    let current;
+    const footer = [{x:0,y:270,w:400,h:30}];
+    const result = await runTiledCapture({
+      mode: "full", dim: dimFor({scrollWidth:800,scrollHeight:700,vw:400,vh:300}),
+      scroll: async (x, y) => ({x, y: Math.min(y, 300)}),
+      hideChrome: async (opts) => { current = opts; hides.push(opts); return opts.bottom ? {} : {bottomRects:footer}; },
+      reset: async () => {}, delay: async () => {},
+      captureTile: async () => JSON.stringify(current),
+    });
+    assert.deepEqual(hides, [
+      {top:false,bottom:true}, {top:false,bottom:true},
+      {top:true,bottom:true}, {top:true,bottom:true},
+      {top:true,bottom:false}, {top:true,bottom:false},
+    ]);
+    assert.equal(result.shots.length, 6);
+    assert.deepEqual(result.shots.slice(-2).map((s) => s.bottomRects), [footer,footer]);
+  });
+
+  it("hides the footer on every tile but the last and uses actual scroll positions", async () => {
     const hides = [];
     const scrolls = [];
     const result = await runTiledCapture({
@@ -27,8 +47,8 @@ describe("runTiledCapture", () => {
         scrolls.push([x, y]);
         return { x, y };
       },
-      hideChrome: async () => {
-        hides.push(scrolls.length);
+      hideChrome: async (opts) => {
+        hides.push(opts);
       },
       reset: async () => {},
       captureTile: async () => "data:tile",
@@ -43,25 +63,83 @@ describe("runTiledCapture", () => {
         [0, 1200],
       ],
     );
-    assert.deepEqual(hides, [2, 3]);
+    assert.deepEqual(hides, [
+      { top: false, bottom: true },
+      { top: true, bottom: true },
+      { top: true, bottom: false },
+    ]);
   });
 
-  it("skips a duplicate actual scroll position", async () => {
+  it("leaves chrome alone when the page fits in one tile", async () => {
+    let hides = 0;
+    const result = await runTiledCapture({
+      mode: "full",
+      dim: dimFor({ scrollWidth: 800, scrollHeight: 600, vw: 800, vh: 600 }),
+      scroll: async (x, y) => ({ x, y }),
+      hideChrome: async () => {
+        hides += 1;
+      },
+      reset: async () => {},
+      captureTile: async () => "data:tile",
+      delay: async () => {},
+    });
+    assert.equal(result.tiles, 1);
+    assert.equal(hides, 0);
+  });
+
+  it("sizes the canvas to the tiles that actually scrolled", async () => {
+    const result = await runTiledCapture({
+      mode: "full",
+      dim: dimFor({ scrollWidth: 1600, scrollHeight: 800, vw: 800, vh: 800 }),
+      scroll: async () => ({ x: 0, y: 0 }),
+      hideChrome: async () => {},
+      reset: async () => {},
+      captureTile: async () => "data:tile",
+      delay: async () => {},
+    });
+    assert.equal(result.tiles, 2);
+    assert.equal(result.fullW, 800);
+    assert.equal(result.fullH, 800);
+  });
+
+  it("skips an intermediate duplicate but captures the last position again", async () => {
     let n = 0;
     const result = await runTiledCapture({
       mode: "full",
-      dim: dimFor({ scrollWidth: 800, scrollHeight: 1000, vw: 800, vh: 800 }),
+      dim: dimFor({ scrollWidth: 800, scrollHeight: 2000, vw: 800, vh: 800 }),
       scroll: async (x, y) => {
         n += 1;
-        if (n === 2) return { x: 0, y: 0 };
-        return { x, y };
+        return { x: 0, y: 0 };
       },
       hideChrome: async () => {},
       reset: async () => {},
       captureTile: async () => "data:tile",
       delay: async () => {},
     });
-    assert.equal(result.tiles, 1);
+    assert.equal(n, 3);
+    assert.equal(result.tiles, 2);
+  });
+
+  it("retains the final frame and footer rectangles when its scroll position clamps", async () => {
+    let bottomVisible = false;
+    const bottomRects = [{ x: 0, y: 740, w: 800, h: 60 }];
+    const result = await runTiledCapture({
+      mode: "full",
+      dim: dimFor({ scrollWidth: 800, scrollHeight: 1000, vw: 800, vh: 800 }),
+      scroll: async () => ({ x: 0, y: 0 }),
+      hideChrome: async ({ bottom }) => {
+        bottomVisible = !bottom;
+        return bottomVisible ? { bottomRects } : {};
+      },
+      reset: async () => {},
+      captureTile: async () => bottomVisible ? "data:footer" : "data:content",
+      delay: async () => {},
+    });
+    assert.deepEqual(result.shots, [
+      { x: 0, y: 0, dataUrl: "data:content" },
+      { x: 0, y: 0, dataUrl: "data:footer", bottomRects },
+    ]);
+    assert.equal(result.fullH, 800);
   });
 
   it("places a visible capture at (0,0) regardless of scroll", async () => {

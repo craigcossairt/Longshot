@@ -41,6 +41,7 @@ export function bindOverflowCapture(policy) {
   let el = null;
   let orig = null;
   let windowOrig = null;
+  let scrollGeneration = 0;
 
   function cropRect(target) {
     const r = target.getBoundingClientRect();
@@ -65,7 +66,90 @@ export function bindOverflowCapture(policy) {
     return extraH * c.clientWidth + extraW * c.clientHeight;
   }
 
+  function visible(node) {
+    for (let current = node; current; current = current.parentElement) {
+      const style = globalThis.getComputedStyle(current);
+      if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0) return false;
+    }
+    return true;
+  }
+
+  function findOverlay(doc, vw, vh) {
+    let nodes;
+    try {
+      nodes = doc.querySelectorAll("*");
+    } catch {
+      return null;
+    }
+    let best = null;
+    const minArea = vw * vh * 0.6;
+    nodes.forEach((node) => {
+      if (node.id === "longshot-capture-style") return;
+      let style;
+      try {
+        style = globalThis.getComputedStyle(node);
+      } catch {
+        return;
+      }
+      // A dialog role alone also describes non-modal cookie banners. Only an
+      // explicit modal or the native top-layer modal state can override geometry.
+      const semantic = node.matches?.('[aria-modal="true"], dialog:modal');
+      if (!semantic && style.position !== "fixed") return;
+      if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0 || Number(style.zIndex) < 0) return;
+      for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        const parentStyle = globalThis.getComputedStyle(ancestor);
+        if (parentStyle.display === "none" || parentStyle.visibility === "hidden" || Number(parentStyle.opacity) === 0) return;
+      }
+      const rect = node.getBoundingClientRect();
+      if (rect.width < 8 || rect.height < 8 || rect.right <= 0 || rect.bottom <= 0 || rect.left >= vw || rect.top >= vh) return;
+      if (!semantic && (rect.width < vw * 0.7 || rect.height < vh * 0.7 || rect.width * rect.height < minArea)) return;
+      const hit = doc.elementFromPoint(Math.max(0, Math.min(vw - 1, rect.left + rect.width / 2)), Math.max(0, Math.min(vh - 1, rect.top + rect.height / 2)));
+      if (!hit || (hit !== node && !node.contains(hit))) return;
+      // Geometry alone also matches wallpapers and fixed app shells. A foreground
+      // dialog or a real inner scroller is required before overriding page capture.
+      const dialog = semantic || node.querySelector?.('[aria-modal="true"], dialog:modal');
+      if (!dialog && !findScrollerWithin(node)) return;
+      best = node;
+    });
+    return best;
+  }
+
+  function findScrollerWithin(root, minExtra = 24) {
+    const nodes = [root];
+    try {
+      root.querySelectorAll("*").forEach((node) => nodes.push(node));
+    } catch {
+      /* ignore */
+    }
+    let best = null;
+    let bestScore = 0;
+    for (const node of nodes) {
+      if (node.id === "longshot-capture-style") continue;
+      let style;
+      try {
+        style = globalThis.getComputedStyle(node);
+      } catch {
+        continue;
+      }
+      if (style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0) continue;
+      const oy = style.overflowY;
+      const ox = style.overflowX;
+      if (!/(auto|scroll|overlay)/.test(oy) && !/(auto|scroll|overlay)/.test(ox)) continue;
+      if (node.clientWidth < 8 || node.clientHeight < 8 || !visible(node)) continue;
+      const extraH = Math.max(0, node.scrollHeight - node.clientHeight);
+      const extraW = Math.max(0, node.scrollWidth - node.clientWidth);
+      if (extraH < minExtra && extraW < minExtra) continue;
+      const score = extraH * node.clientWidth + extraW * node.clientHeight;
+      if (score > bestScore) {
+        best = node;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
   function find() {
+    scrollGeneration += 1;
     el = null;
     orig = null;
     const doc = globalThis.document;
@@ -74,6 +158,27 @@ export function bindOverflowCapture(policy) {
     windowOrig = { x: globalThis.scrollX, y: globalThis.scrollY };
     const html = doc.documentElement;
     const body = doc.body;
+    const overlay = findOverlay(doc, vw, vh);
+    if (overlay) {
+      const target = findScrollerWithin(overlay, 1);
+      if (!target) return { kind: "modal", fits: true };
+      el = target;
+      orig = { x: el.scrollLeft, y: el.scrollTop };
+      el.scrollLeft = 0;
+      el.scrollTop = 0;
+      const fits = el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth;
+      return {
+        kind: "modal",
+        fits,
+        scrollLeft: el.scrollLeft,
+        scrollTop: el.scrollTop,
+        scrollWidth: Math.max(el.scrollWidth, el.clientWidth),
+        scrollHeight: Math.max(el.scrollHeight, el.clientHeight),
+        clientWidth: el.clientWidth,
+        clientHeight: el.clientHeight,
+        crop: cropRect(el),
+      };
+    }
     const pageScore =
       Math.max(0, Math.max(html.scrollHeight, body?.scrollHeight || 0) - vh) * vw +
       Math.max(0, Math.max(html.scrollWidth, body?.scrollWidth || 0) - vw) * vh;
@@ -97,7 +202,7 @@ export function bindOverflowCapture(policy) {
       const oy = style.overflowY;
       const ox = style.overflowX;
       if (!/(auto|scroll|overlay)/.test(oy) && !/(auto|scroll|overlay)/.test(ox)) return;
-      if (node.clientWidth < 8 || node.clientHeight < 8) return;
+      if (node.clientWidth < 8 || node.clientHeight < 8 || !visible(node)) return;
       const score = scoreOf(
         {
           scrollWidth: node.scrollWidth,
@@ -148,6 +253,7 @@ export function bindOverflowCapture(policy) {
   }
 
   async function scroll(x, y) {
+    const generation = scrollGeneration;
     if (!el) return { x, y };
     const maxX = Math.max(0, el.scrollWidth - el.clientWidth);
     const maxY = Math.max(0, el.scrollHeight - el.clientHeight);
@@ -157,12 +263,14 @@ export function bindOverflowCapture(policy) {
       el.scrollLeft = tx;
       el.scrollTop = ty;
       await waitFrames(2);
+      if (generation !== scrollGeneration || !el) return { x: 0, y: 0 };
       if (Math.abs(el.scrollLeft - tx) < 1 && Math.abs(el.scrollTop - ty) < 1) break;
     }
     return { x: el.scrollLeft, y: el.scrollTop, crop: cropRect(el) };
   }
 
   function reset() {
+    scrollGeneration += 1;
     if (el && orig) {
       el.scrollLeft = orig.x;
       el.scrollTop = orig.y;

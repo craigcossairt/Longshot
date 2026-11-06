@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -61,4 +63,42 @@ describe("CDP + Bloom-shaped CSP", { timeout: 120000 }, () => {
       await browser.close();
     }
   });
+});
+
+
+it("CDP subprocess exits, preserves existing tabs, and captures strict CSP without bypass", { timeout: 120000 }, async () => {
+  const listener = createServer();
+  await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
+  const port = listener.address().port;
+  await new Promise((resolve) => listener.close(resolve));
+  const launch = { headless: true, args: [`--remote-debugging-port=${port}`] };
+  if (channel !== "chromium") launch.channel = channel;
+  const browser = await chromium.launch(launch);
+  let observer;
+  try {
+    observer = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const existing = await observer.contexts()[0].newPage();
+    await existing.setContent('<input value="unsaved work">');
+    const before = existing.url();
+    const targetIds = async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json())
+      .filter((target) => target.type === "page").map((target) => target.id).sort();
+    const beforeTargets = await targetIds();
+    const strictFixture = pathToFileURL(join(root, "test/fixtures/csp.html")).href;
+    const result = await new Promise((resolve, reject) => {
+      execFile(process.execPath, [join(root, "longshot.js"), "--url", strictFixture,
+        "--cdp", `http://127.0.0.1:${port}`, "--full-page", "--out", join(tmp, "strict-cdp.png")],
+      { timeout: 45000 }, (error, stdout, stderr) => {
+        if (error) return reject(new Error(`CLI failed or did not exit: ${error.message} ${stderr}`));
+        try { resolve(JSON.parse(stdout)); } catch (error) { reject(error); }
+      });
+    });
+    assert.equal(result.ok, true);
+    assert.equal(browser.isConnected(), true, "external browser remains running");
+    assert.equal(existing.url(), before);
+    assert.equal(await existing.locator("input").inputValue(), "unsaved work");
+    assert.deepEqual(await targetIds(), beforeTargets, "capture tab was closed and existing targets remain");
+  } finally {
+    await observer?.close();
+    await browser.close();
+  }
 });

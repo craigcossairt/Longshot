@@ -3,6 +3,7 @@ import {
   OVERFLOW_POLICY,
   bindOverflowCapture,
   cropVisible,
+  compositeModal,
   filename,
   fitFileSize,
   fitLimits,
@@ -11,7 +12,6 @@ import {
   mimeFor,
   runTiledCapture,
   stitch,
-  usesQuality,
 } from "./core/index.js";
 import { getSettings, saveExport } from "./export.js";
 import { longshotPushHistory } from "./history.js";
@@ -214,47 +214,98 @@ function captureGapMs() {
   return Math.ceil(1000 / perSecond) + 80;
 }
 
-async function captureVisibleTabPaced(windowId) {
+// CaptureVisibleTab selects by window, so a tab change invalidates the entire capture.
+function createCaptureGuard(tab) {
+  let error;
+  let rejectCancelled;
+  const cancelled = new Promise((_, reject) => { rejectCancelled = reject; });
+  cancelled.catch(() => {});
+  const cancel = () => {
+    if (!error) {
+      error = new Error("Capture cancelled because the page or active tab changed. Try again on the intended page.");
+      rejectCancelled(error);
+    }
+  };
+  const activated = (info) => { if (info.windowId === tab.windowId && info.tabId !== tab.id) cancel(); };
+  const readDocument = async () => {
+    const [frame] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] }, injectImmediately: true, func: () => null,
+    });
+    if (!frame?.documentId) throw new Error("Main document is unavailable");
+    return frame.documentId;
+  };
+  const initialDocument = canInjectIntoTab(tab.url) ? readDocument() : null;
+  initialDocument?.catch(cancel);
+  const checkDocument = async () => {
+    if (initialDocument && await readDocument() !== await initialDocument) cancel();
+  };
+  const updated = (id, change) => {
+    if (id !== tab.id) return;
+    if (change.url && change.url !== tab.url) cancel();
+    // Tab loading also fires for subframes. Compare the main document identity
+    // instead, including same-URL reloads, without requesting new permissions.
+    else if (change.status && initialDocument) void checkDocument().catch(cancel);
+    else if (change.status === "loading") cancel();
+  };
+  const removed = (id) => { if (id === tab.id) cancel(); };
+  chrome.tabs.onActivated.addListener(activated);
+  chrome.tabs.onUpdated.addListener(updated);
+  chrome.tabs.onRemoved.addListener(removed);
+  return {
+    wait(promise) { return Promise.race([promise, cancelled]); },
+    async check() {
+      if (error) throw error;
+      const [current] = await Promise.race([chrome.tabs.query({ active: true, windowId: tab.windowId }), cancelled]);
+      if (!current || current.id !== tab.id || current.url !== tab.url || current.pendingUrl) cancel();
+      await Promise.race([checkDocument().catch(cancel), cancelled]);
+      if (error) throw error;
+    },
+    close() {
+      chrome.tabs.onActivated.removeListener(activated);
+      chrome.tabs.onUpdated.removeListener(updated);
+      chrome.tabs.onRemoved.removeListener(removed);
+    },
+  };
+}
+
+async function captureVisibleTabPaced(tab, guard) {
   const gap = captureGapMs();
   const wait = lastCaptureAt + gap - Date.now();
-  if (wait > 0) await delay(wait);
+  if (wait > 0) await guard.wait(delay(wait));
 
   let lastError;
   for (let attempt = 0; attempt < 8; attempt++) {
     lastCaptureAt = Date.now();
     try {
-      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+      await guard.check();
+      const dataUrl = await guard.wait(chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }));
+      await guard.check();
       if (!dataUrl) throw new Error("Empty capture");
       return dataUrl;
     } catch (error) {
       lastError = error;
       if (!isQuotaError(error)) throw error;
-      await delay(1000 + attempt * 250);
+      await guard.wait(delay(1000 + attempt * 250));
     }
   }
   throw lastError;
 }
 
-async function finishCapture(canvas, dim, settings, { tab, popup }) {
+async function finishCapture(canvas, dim, settings, { tab, popup, guard, alreadyScaled = false }) {
   const io = { decode, createCanvas, encode };
-  canvas = fitLimits(canvas, settings, io);
-  canvas = await fitFileSize(canvas, settings, io);
+  canvas = fitLimits(canvas, alreadyScaled ? { ...settings, scalePercent: 100 } : settings, io);
   const mime = mimeFor(settings.format);
-  let blob;
-  try {
-    blob = await canvas.convertToBlob({
-      type: mime,
-      quality: usesQuality(settings.format) ? settings.quality : 1,
-    });
-  } catch {
-    blob = null;
-  }
-  // convertToBlob falls back to PNG for types it cannot encode instead of throwing.
+  const fitted = await fitFileSize(canvas, settings, io);
+  canvas = fitted.canvas;
+  const blob = fitted.encoded.blob;
   if (!blob || blob.type !== mime) {
     throw new Error(`This browser cannot encode ${String(settings.format).toUpperCase()}`);
   }
+  if (!fitted.fits) throw new Error("The capture cannot fit the maximum file size. Increase the limit or choose another format.");
+  await guard.check();
+  guard.close();
   const dataUrl = await blobToDataUrl(blob);
-  const record = {
+  let record = {
     id: crypto.randomUUID(),
     title: dim.title,
     url: dim.url,
@@ -265,7 +316,7 @@ async function finishCapture(canvas, dim, settings, { tab, popup }) {
     createdAt: Date.now(),
     byteSize: blob.size,
   };
-  await longshotPushHistory(record);
+  record = await longshotPushHistory(record);
   await chrome.storage.local.set({ longshotCurrent: record });
   if (settings.autoDownload || (settings.skipEditor && settings.skipEditorAction === "download")) {
     await saveExport(blob, filename(record, settings), settings);
@@ -287,25 +338,29 @@ async function finishCapture(canvas, dim, settings, { tab, popup }) {
   return {};
 }
 
-async function captureRegion(tab, settings) {
-  await ensureContent(tab.id);
+async function captureRegion(tab, settings, guard) {
+  await guard.wait(ensureContent(tab.id));
   report("Select an area", { index: 0, total: 1, phase: "select" });
-  const rect = await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SELECT_REGION" });
-  if (!rect?.w || !rect?.h) throw new Error("Selection cancelled");
-  report("Capturing", { index: 1, total: 1, phase: "capture" });
-  await delay(60);
-  const dataUrl = await captureVisibleTabPaced(tab.windowId);
-  const canvas = await cropVisible(dataUrl, rect, rect.devicePixelRatio || 1, { decode, createCanvas });
-  return finishCapture(canvas, rect, settings, { tab, popup: false });
+  try {
+    const rect = await guard.wait(chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_SELECT_REGION" }));
+    if (!rect?.w || !rect?.h) throw new Error("Selection cancelled");
+    report("Capturing", { index: 1, total: 1, phase: "capture" });
+    await delay(60);
+    const dataUrl = await captureVisibleTabPaced(tab, guard);
+    const canvas = await cropVisible(dataUrl, rect, rect.devicePixelRatio || 1, { decode, createCanvas });
+    return finishCapture(canvas, rect, settings, { tab, popup: false, guard });
+  } finally {
+    await chrome.tabs.sendMessage(tab.id, { type: "LONGSHOT_CANCEL_REGION" }).catch(() => {});
+  }
 }
 
-async function captureVisibleOnly(tab, settings, popup) {
+async function captureVisibleOnly(tab, settings, popup, guard) {
   report("Capturing", { index: 1, total: 1, phase: "capture" });
-  const dataUrl = await captureVisibleTabPaced(tab.windowId);
+  const dataUrl = await captureVisibleTabPaced(tab, guard);
   const bmp = await decode(dataUrl);
   const canvas = createCanvas(bmp.width, bmp.height);
   canvas.getContext("2d").drawImage(bmp, 0, 0);
-  return finishCapture(canvas, { title: tab.title || "Page", url: tab.url || "" }, settings, { tab, popup });
+  return finishCapture(canvas, { title: tab.title || "Page", url: tab.url || "" }, settings, { tab, popup, guard });
 }
 
 async function captureActive(mode, { popup = false } = {}) {
@@ -314,29 +369,39 @@ async function captureActive(mode, { popup = false } = {}) {
   if (isBrowserUiPage(tab.url)) {
     throw new Error("This page cannot be captured");
   }
+  const guard = createCaptureGuard(tab);
+  try {
+    await guard.check();
+    return await captureTab(mode, tab, popup, guard);
+  } finally {
+    guard.close();
+  }
+}
+
+async function captureTab(mode, tab, popup, guard) {
   const settings = await getSettings();
   const ownPage = isOwnExtensionPage(tab.url);
   if (!ownPage && !canInjectIntoTab(tab.url)) {
     if (mode === "region") {
       throw new Error("Area select is not available on this page. Use visible or full page.");
     }
-    return captureVisibleOnly(tab, settings, popup);
+    return captureVisibleOnly(tab, settings, popup, guard);
   }
   if (mode === "region") {
     if (ownPage) throw new Error("Area select is not available on this page.");
-    return captureRegion(tab, settings);
+    return captureRegion(tab, settings, guard);
   }
   if (ownPage && mode === "visible") {
-    return captureVisibleOnly(tab, settings, popup);
+    return captureVisibleOnly(tab, settings, popup, guard);
   }
   if (ownPage) {
     try {
       await sendToTab(tab.id, { type: "LONGSHOT_PING" }, true);
     } catch {
-      return captureVisibleOnly(tab, settings, popup);
+      return captureVisibleOnly(tab, settings, popup, guard);
     }
   } else {
-    await ensureContent(tab.id);
+    await guard.wait(ensureContent(tab.id));
   }
   // Measuring injects capture CSS and may resize iframes. runTiledCapture undoes that
   // in its finally; if anything fails before it starts, undo it here.
@@ -344,9 +409,11 @@ async function captureActive(mode, { popup = false } = {}) {
   let dim;
   let result;
   let shellCanvas = null;
+  let baseCanvas = null;
+  let modal = null;
   let dpr = 1;
   try {
-    dim = await sendToTab(
+    dim = await guard.wait(sendToTab(
       tab.id,
       {
         type: "LONGSHOT_MEASURE",
@@ -354,8 +421,10 @@ async function captureActive(mode, { popup = false } = {}) {
         findOverflow: Boolean(settings.captureOverflow && mode === "full"),
       },
       ownPage,
-    );
+    ));
     const overflow = mode === "full" && dim?.overflow;
+    modal = overflow?.kind === "modal" ? overflow : null;
+    if (modal?.fits) return await captureVisibleOnly(tab, settings, popup, guard);
     const captureDim = overflow
       ? {
           ...dim,
@@ -369,9 +438,15 @@ async function captureActive(mode, { popup = false } = {}) {
       : dim;
     let lastCrop = overflow?.crop || null;
     dpr = dim.devicePixelRatio || 1;
-    const shellH = overflow?.crop?.y || 0;
+    const shellH = modal ? 0 : overflow?.crop?.y || 0;
+    if (modal) {
+      const bmp = await decode(await captureVisibleTabPaced(tab, guard));
+      baseCanvas = createCanvas(bmp.width, bmp.height);
+      baseCanvas.getContext("2d").drawImage(bmp, 0, 0);
+      bmp.close?.();
+    }
     if (mode === "full" && shellH > 8) {
-      const shellShot = await captureVisibleTabPaced(tab.windowId);
+      const shellShot = await captureVisibleTabPaced(tab, guard);
       shellCanvas = await cropVisible(
         shellShot,
         { x: 0, y: 0, w: dim.viewportWidth, h: shellH },
@@ -383,22 +458,27 @@ async function captureActive(mode, { popup = false } = {}) {
       mode,
       dim: captureDim,
       scroll: async (x, y) => {
-        const pos = await sendToTab(tab.id, { type: "LONGSHOT_SCROLL", x, y }, ownPage);
+        const pos = await guard.wait(sendToTab(tab.id, { type: "LONGSHOT_SCROLL", x, y }, ownPage));
         if (pos?.crop) lastCrop = pos.crop;
         return pos;
       },
-      hideChrome: () => sendToTab(tab.id, { type: "LONGSHOT_HIDE_CHROME" }, ownPage),
+      hideChrome: async (opts) => {
+        const reply = await guard.wait(sendToTab(tab.id, {
+          type: "LONGSHOT_HIDE_CHROME", ...opts, barsOnly: Boolean(modal), anchor: lastCrop,
+        }, ownPage));
+        return { bottomRects: (reply?.bottomRects || []).map((r) => ({ ...r, x: r.x - (lastCrop?.x || 0), y: r.y - (lastCrop?.y || 0) })) };
+      },
       reset: (orig) => {
         resetSent = true;
         return sendToTab(tab.id, { type: "LONGSHOT_RESET", x: orig.x, y: orig.y }, ownPage);
       },
       captureTile: async () => {
-        const dataUrl = await captureVisibleTabPaced(tab.windowId);
+        const dataUrl = await captureVisibleTabPaced(tab, guard);
         if (!lastCrop?.w || !lastCrop?.h) return dataUrl;
         const canvas = await cropVisible(dataUrl, lastCrop, dpr, { decode, createCanvas });
         return blobToDataUrl(await canvas.convertToBlob({ type: "image/png" }));
       },
-      delay,
+      delay: (ms) => guard.wait(delay(ms)),
       onProgress: ({ index, total, text, phase }) => report(text, { index, total, phase }),
     });
   } finally {
@@ -409,17 +489,33 @@ async function captureActive(mode, { popup = false } = {}) {
 
   report("Stitching", { index: result.shots.length, total: result.shots.length, phase: "stitch" });
 
-  // Scale while stitching so a tall page never needs a full-size canvas.
+  // Apply percentage scaling once, including shells/modal backdrops in the size budget.
   const shellPx = shellCanvas ? shellCanvas.height : 0;
-  const scale = limitScale(result.fullW * dpr, result.fullH * dpr + shellPx, settings);
-  let canvas = await stitch(
-    result.shots,
-    { fullW: result.fullW, fullH: result.fullH, dpr, scale },
-    { decode, createCanvas },
-  );
+  const width = baseCanvas
+    ? baseCanvas.width + Math.max(0, result.fullW * dpr - Math.round(modal.crop.w * dpr))
+    : Math.max(result.fullW * dpr, shellCanvas?.width || 0);
+  const height = baseCanvas
+    ? baseCanvas.height + Math.max(0, result.fullH * dpr - Math.round(modal.crop.h * dpr))
+    : result.fullH * dpr + shellPx;
+  const scale = limitScale(width, height + chromeHeight(settings), settings, (s) => {
+    const k = dpr * s;
+    let w = Math.max(1, Math.round(result.fullW * k));
+    let h = Math.max(1, Math.round(result.fullH * k));
+    if (shellCanvas) {
+      w = Math.max(w, Math.max(1, Math.round(shellCanvas.width * s)));
+      h += Math.max(1, Math.round(shellCanvas.height * s));
+    }
+    if (baseCanvas) {
+      w = Math.max(1, Math.round(baseCanvas.width * s)) + Math.max(0, w - Math.round(modal.crop.w * k));
+      h = Math.max(1, Math.round(baseCanvas.height * s)) + Math.max(0, h - Math.round(modal.crop.h * k));
+    }
+    return { width: w, height: h + Math.round(chromeHeight(settings) * s) };
+  });
+  let canvas = await stitch(result.shots, { fullW: result.fullW, fullH: result.fullH, dpr, scale }, { decode, createCanvas });
   if (shellCanvas) canvas = stackVertical(shellCanvas, canvas, scale);
-  canvas = compositeChrome(canvas, dim, settings);
-  return finishCapture(canvas, dim, settings, { tab, popup });
+  if (baseCanvas) canvas = compositeModal(baseCanvas, canvas, modal.crop, dpr, createCanvas, scale);
+  canvas = compositeChrome(canvas, dim, settings, scale);
+  return finishCapture(canvas, dim, settings, { tab, popup, guard, alreadyScaled: true });
 }
 
 function chromeHeight(settings) {
@@ -428,19 +524,21 @@ function chromeHeight(settings) {
   return 0;
 }
 
-function compositeChrome(source, dim, settings) {
-  const extra = chromeHeight(settings);
+function compositeChrome(source, dim, settings, scale = 1) {
+  const extra = Math.round(chromeHeight(settings) * scale);
   if (!extra) return source;
   const canvas = new OffscreenCanvas(source.width, source.height + extra);
   const ctx = canvas.getContext("2d");
+  ctx.save();
+  ctx.scale(scale, scale);
   ctx.fillStyle = "#e8e6e1";
-  ctx.fillRect(0, 0, canvas.width, extra);
+  ctx.fillRect(0, 0, canvas.width / scale, extra / scale);
   ctx.fillStyle = "#3a3834";
   ctx.font = "500 16px sans-serif";
-  ctx.fillText((dim.url || "").slice(0, 80), 20, extra === 86 ? 68 : 24);
+  ctx.fillText((dim.url || "").slice(0, 80), 20, settings.includeBrowserBar ? 68 : 24);
   if (settings.includeBrowserBar) {
     ctx.fillStyle = "#d4d1cb";
-    ctx.fillRect(0, 0, canvas.width, 40);
+    ctx.fillRect(0, 0, canvas.width / scale, 40);
     ["#e15a4a", "#e0b84e", "#5e9a7a"].forEach((c, i) => {
       ctx.beginPath();
       ctx.fillStyle = c;
@@ -450,6 +548,7 @@ function compositeChrome(source, dim, settings) {
     ctx.fillStyle = "#3a3834";
     ctx.fillText((dim.title || "Page").slice(0, 40), 92, 26);
   }
+  ctx.restore();
   ctx.drawImage(source, 0, extra);
   return canvas;
 }

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Horizontal modal fixture</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #203040; }
+  .right-marker { position: absolute; right: 0; top: 0; width: 30px; height: 30px; background: #9b23ca; }
+  .bottom-marker { position: absolute; left: 0; bottom: 0; width: 30px; height: 30px; background: #cfab22; }
+  #dialog { position: fixed; left: 100px; top: 80px; width: 400px; height: 300px; overflow: auto; scrollbar-width: none; }
+  #dialog::-webkit-scrollbar { display: none; }
+  .content { position: relative; width: 800px; height: 300px; background: linear-gradient(to right, #d24b40 50%, #3456ab 50%); }
+  .end { position: absolute; bottom: 0; right: 0; width: 40px; height: 40px; background: #2f6f4f; }
+</style>
+<div class="right-marker"></div>
+<div class="bottom-marker"></div>
+<div role="dialog" aria-modal="true" id="dialog"><div class="content"><div class="end"></div></div></div>
+<script>
+  if (new URLSearchParams(location.search).has('tall')) document.querySelector('.content').style.height = '700px';
+</script>
+</html>
